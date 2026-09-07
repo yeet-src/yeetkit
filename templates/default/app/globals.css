@@ -1,0 +1,118 @@
+/* Tailwind is imported for you — this file is for your theme and any
+ * CSS of your own.
+ *
+ * A zenburn-ish terminal palette and nothing else: no shadows, no
+ * rounded corners, no gradients, no texture. Structure comes from
+ * whitespace and single rules, the way it does in a terminal — a box
+ * drawn around something is a decision to look like a UI kit.
+ *
+ * Every colour is checked against the ground it sits on rather than
+ * eyeballed — which on black is not a formality, since the most
+ * saturated version of a hue is often the unreadable one.
+ */
+@theme {
+  /* True black and the sixteen-colour palette a terminal would have:
+   * pure red, yellow, green, cyan and magenta, at full saturation.
+   *
+   * Two of those decisions are forced rather than chosen. Pure blue
+   * (#0000ff) is 2.4:1 on black — unreadable — so blue is the one hue
+   * that has to be lifted; #29b6ff keeps the hue and reaches 9.2:1.
+   * And the palette's brightness is deliberately uneven — yellow at
+   * 19.6:1 next to red at 5.25:1 — because that unevenness *is* the
+   * ANSI convention. A chart palette would be levelled; a terminal is
+   * not a chart.
+   *
+   * Colour never carries meaning alone here. Every value sits under a
+   * column heading or beside a word, which matters more than usual
+   * with this palette: to a deuteranope, magenta and blue are nearly
+   * the same colour (ΔE 2.9), so the two are never the only
+   * difference between two things.
+   */
+  --color-bg: #000000;
+  --color-mode: #141414; /* a hovered row, one step off black */
+  --color-rule: #2a2a2a; /* the one line weight there is */
+  --color-fg: #f0f0f0; /* 18.4:1 */
+  --color-dim: #8a8a8a; /* 6.1:1 — secondary values */
+
+  --color-red: #ff0000; /* 5.25:1 — errors */
+  --color-orange: #ff9500; /* 9.55:1 — warnings */
+  --color-yellow: #ffff00; /* 19.6:1 — the number that moves */
+  --color-green: #00ff00; /* 15.3:1 */
+  --color-cyan: #00ffff; /* 16.8:1 */
+  --color-blue: #29b6ff; /* 9.23:1 — links */
+  --color-magenta: #ff00ff; /* 6.70:1 — buffer names */
+
+  /* `;;` lines, in the green a terminal would use for them. */
+  --color-comment: #00ff00;
+
+  /* Whatever the machine has. A webfont would be one more thing to
+   * load before the first frame, and a box with a good mono installed
+   * should simply use it. */
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo,
+    Consolas, monospace;
+}
+
+
+html {
+  color-scheme: dark;
+}
+
+/* Monospace throughout, deliberately: the whole layout is columns of
+ * numbers, and proportional digits make a table of them jitter as it
+ * updates. */
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  /* Emacs' region: inverted, not tinted. */
+  background: var(--color-fg);
+  color: var(--color-bg);
+}
+
+body[data-state="reconnecting"] {
+  opacity: 0.6;
+}
+
+/* ---- the two pieces used in more than one place ------------------ */
+
+/* A `;;` line. The comment marker is content rather than typed into
+ * every heading, so a heading is a heading and reads as one in the
+ * source. */
+@utility comment {
+  color: var(--color-comment);
+
+  /* Nested, because a utility's *name* has to be a plain identifier —
+   * `@utility comment::before` is rejected. */
+  &::before {
+    content: ";; ";
+  }
+}
+
+/* A block cursor. `steps(1)` because a cursor blinks; it does not
+ * fade. */
+@utility caret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.1em;
+  vertical-align: text-bottom;
+  background: var(--color-fg);
+  animation: caret 1.1s steps(1) infinite;
+}
+
+@keyframes caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caret {
+    animation: none;
+  }
+}

@@ -61,6 +61,39 @@ hydration: the bytes are proportional to what changed.
 Clicking the counter in the template sends one event up and produces
 exactly one patch back.
 
+## Direct
+
+An isolate has two lanes out, not one. The tty is the portal above:
+bidirectional, and the only lane with an input side. The console lane is
+`console.log`, it only goes out, and it can be bound to its own WebSocket
+just the same. `direct: true` in `yeetkit.config.js` — or `--direct` on
+the command line — splits the traffic across them:
+
+```
+  browser ◀── console:ws://0.0.0.0:3002 ──────────── isolate   the view
+  browser ──▶ node hub ──▶ tty:ws://127.0.0.1:3001    isolate   events, hello
+  node    ◀─▶ tty:ws://127.0.0.1:3001 ◀─────────────▶ isolate   nodecall, return, yield
+```
+
+The snapshot and every patch leave the isolate as one console line per
+frame and the browser dials that lane itself, so Node is out of the
+render path. Everything else is unchanged: events go up through the hub
+because the console lane cannot carry them, and `"use server"` calls and
+per-caller replies stay on the tty, where the hub is still the only
+peer. Nothing has to be banned, and `yeetkit check` asserts that a
+direct build's view arrives on the console lane and not on the tty.
+
+The page dials `ws://<its own host>:<console port>/`, which defaults to
+`ws + 1`; set `console:` to move it. The console lane has no PTY, so the
+frame needs no terminal escaping and arrives intact — but it is
+*dedicated* to the wire now: anything the app itself `console.log`s
+rides the same socket to every browser. The dev server taps the lane
+and prints those lines back to its own log, minus the frames, so a
+debugging line still shows up in the terminal; just know that it also
+showed up on the wire. And a page served over `https` cannot open a
+plain `ws://` socket, so in production the console port needs TLS in
+front of it or this stays a LAN feature.
+
 ## Why bother
 
 Because the data is on the host and nowhere else. An isolate has no
@@ -120,7 +153,7 @@ app/
   docs/[...path]/page.jsx  /docs/*           props.params.path (an array)
   (marketing)/page.jsx  /                    parens group without routing
 public/                 served as-is
-yeetkit.config.js       optional; title, port, ws
+yeetkit.config.js       optional; title, port, ws, direct, console
 ```
 
 Two aliases, the same ones a `yeet new` project uses:

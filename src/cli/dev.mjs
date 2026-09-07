@@ -28,7 +28,7 @@ import { basename, extname, join, normalize, relative } from "node:path";
 import { OBJECT, hasBpf, make, place } from "./bpf.mjs";
 import { RUNTIME, createBundler, entryModule, islandsModule, nodeModule } from "./bundle.mjs";
 import { createActions } from "../host/actions.mjs";
-import { createHub } from "../host/bridge.mjs";
+import { createHub, tapConsole } from "../host/bridge.mjs";
 import { collectRoutes, patternOf, renderRouteModule } from "./routes.mjs";
 import { indexHtml } from "./html.mjs";
 import { startTailwind } from "./tailwind.mjs";
@@ -110,7 +110,7 @@ function routeTable(rows) {
 }
 
 export async function dev(config) {
-  const { root, appDir, publicDir, out, port, wsPort, title, model } = config;
+  const { root, appDir, publicDir, out, port, wsPort, title, model, direct, consolePort } = config;
 
   await mkdir(out, { recursive: true });
 
@@ -130,7 +130,8 @@ export async function dev(config) {
    * rare enough to be worth the whole table rather than a delta. */
   const printRoutes = () => {
     const rows = routeSummary.map((path) => ["GET", path, "page"]);
-    rows.push(["WS", "/@yeetkit/ws", "hub \u2192 isolate"]);
+    rows.push(["WS", "/@yeetkit/ws", direct ? "browser \u2192 hub \u2192 isolate" : "hub \u2194 isolate"]);
+    if (direct) rows.push(["WS", `ws://<host>:${consolePort}/`, "isolate \u2192 browser, direct"]);
     rows.push(["GET", "/@yeetkit/client.js", "browser client"]);
     rows.push(["GET", "/@yeetkit/styles.css", "tailwind"]);
     rows.push([
@@ -199,7 +200,7 @@ export async function dev(config) {
   await buildBpf();
   await writeRoutes();
   const writeEntry = async () =>
-    writeFile(join(out, "entry.jsx"), await entryModule({ title, appDir, out }));
+    writeFile(join(out, "entry.jsx"), await entryModule({ title, appDir, out, direct }));
   await writeEntry();
 
   // ---- bundle -------------------------------------------------------
@@ -324,9 +325,12 @@ export async function dev(config) {
 
   const startIsolate = (attempt = 0) => {
     const startedAt = Date.now();
-    /* Loopback, not 0.0.0.0: the browser no longer talks to the
-     * isolate, the hub does, and it is in this process. */
-    const argv = ["run", "-p", `tty:ws://127.0.0.1:${wsPort}`, bundlePath];
+    /* Loopback, not 0.0.0.0: the browser does not talk to the tty lane,
+     * the hub does, and it is in this process. In direct mode the
+     * console lane is the one browsers dial, so it binds wide. */
+    const argv = ["run", "-p", `tty:ws://127.0.0.1:${wsPort}`];
+    if (direct) argv.push("-p", `console:ws://0.0.0.0:${consolePort}`);
+    argv.push(bundlePath);
     if (model) argv.push("--", "--model", model);
 
     child = spawn("yeet", argv, { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
@@ -367,6 +371,12 @@ export async function dev(config) {
 
   startIsolate();
 
+  /* With the console lane on a socket, the app's own `console.log` no
+   * longer reaches stdout above; this fetches it back, minus the view. */
+  const consoleTap = direct
+    ? tapConsole({ url: `ws://127.0.0.1:${consolePort}/`, onLine: (line) => log("isolate", dim(line)) })
+    : null;
+
   // ---- watching -----------------------------------------------------
 
   const isBrowserSide = (file) =>
@@ -405,7 +415,7 @@ export async function dev(config) {
   // ---- http ---------------------------------------------------------
 
   const clientJs = join(RUNTIME, "..", "client", "client.js");
-  const html = indexHtml({ title, wsPort, dev: true });
+  const html = indexHtml({ title, dev: true, direct: direct ? consolePort : null });
 
   /* Node's http server speaks streams; a route handler speaks
    * `Request`/`Response`. Translating here rather than in the handler
@@ -536,6 +546,7 @@ export async function dev(config) {
     child?.kill("SIGTERM");
     tailwind?.stop();
     hub?.close();
+    consoleTap?.close();
     bundler.dispose();
     islandBundler?.dispose();
     nodeBundler?.dispose();

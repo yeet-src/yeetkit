@@ -3,7 +3,8 @@
  * What it emits is a directory that `yeetkit start` — or a bare `yeet
  * run` plus any static file server — can serve:
  *
- *   dist/server.js    the app, for `yeet run -p tty:ws://...`
+ *   dist/server.js    the app, for `yeet run -p tty:ws://...` (plus
+ *                     `-p console:ws://...` when built with `direct`)
  *   dist/index.html   the shell
  *   dist/client.js    the browser half
  *   dist/styles.css   Tailwind's output
@@ -20,7 +21,7 @@ import { indexHtml } from "./html.mjs";
 import { startTailwind } from "./tailwind.mjs";
 
 export async function build(config) {
-  const { root, appDir, publicDir, out, dist, title, wsPort } = config;
+  const { root, appDir, publicDir, out, dist, title, direct, consolePort } = config;
 
   await mkdir(out, { recursive: true });
   await mkdir(dist, { recursive: true });
@@ -38,7 +39,7 @@ export async function build(config) {
   const collected = await collectRoutes(appDir);
   const { code, summary } = renderRouteModule(collected, out);
   await writeFile(join(out, "routes.js"), code);
-  await writeFile(join(out, "entry.jsx"), await entryModule({ title, appDir, out }));
+  await writeFile(join(out, "entry.jsx"), await entryModule({ title, appDir, out, direct }));
 
   const islands = new Set();
   const actions = new Set();
@@ -118,7 +119,7 @@ export async function build(config) {
   await startTailwind({ root, appDir, out, watch: false });
   await cp(join(out, "styles.css"), join(dist, "styles.css")).catch(() => {});
   await cp(join(RUNTIME, "..", "client", "client.js"), join(dist, "client.js"));
-  await writeFile(join(dist, "index.html"), indexHtml({ title, wsPort, dev: false }));
+  await writeFile(join(dist, "index.html"), indexHtml({ title, dev: false, direct: direct ? consolePort : null }));
   await cp(publicDir, dist, { recursive: true }).catch(() => {});
 
   const bpfSize = (await readFile(join(dist, "bin", OBJECT)).catch(() => "")).length;
@@ -126,6 +127,7 @@ export async function build(config) {
   const islandSize = (await readFile(join(dist, "islands.js")).catch(() => "")).length;
 
   console.log(`built ${summary.length} route${summary.length === 1 ? "" : "s"} — server.js ${(size / 1024).toFixed(1)}kb`);
+  if (direct) console.log(`direct — the view leaves on console:ws://:${consolePort}, the hub keeps the tty`);
   for (const path of summary) console.log(`  ${path}`);
   if (bpfSize > 0) console.log(`bpf — bin/${OBJECT} ${(bpfSize / 1024).toFixed(1)}kb`);
   if (actions.size > 0 || isolateFns.size > 0) {

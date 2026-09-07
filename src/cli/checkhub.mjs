@@ -54,7 +54,7 @@ const check = (label, ok, detail = "") => {
 
 const server = spawn(
   process.execPath,
-  [resolve(here, "..", "..", "bin", "yeetkit.mjs"), "dev", "--port", String(port), "--ws", String(wsPort)],
+  [resolve(here, "..", "..", "bin", "yeetkit.mjs"), "dev", "--port", String(port), "--ws", String(wsPort), "--no-direct"],
   {
     cwd: project,
     stdio: ["ignore", "pipe", "pipe"],

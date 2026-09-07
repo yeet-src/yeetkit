@@ -34,6 +34,11 @@ async function loadConfig(root) {
     wsPort: 3001,
     title: "yeetkit",
     model: null,
+    /* Direct mode: the isolate's console lane is bound to a second
+     * WebSocket that browsers dial themselves, and carries the view.
+     * The hub keeps the tty for events and everything private. */
+    direct: false,
+    consolePort: null, // wsPort + 1 unless set
   };
 
   /* A config file is optional — the conventions above are the whole
@@ -50,14 +55,21 @@ async function loadConfig(root) {
 
   const overrides = {};
   if (loaded.ws !== undefined) overrides.wsPort = Number(loaded.ws);
+  if (loaded.console !== undefined) overrides.consolePort = Number(loaded.console);
   if (flag("port")) overrides.port = Number(flag("port"));
   if (flag("ws")) overrides.wsPort = Number(flag("ws"));
+  if (flag("console")) overrides.consolePort = Number(flag("console"));
   if (flag("model")) overrides.model = flag("model");
+  /* Boolean flags take no value, so they are looked up by presence. */
+  if (argv.includes("--direct")) overrides.direct = true;
+  if (argv.includes("--no-direct")) overrides.direct = false;
 
   const config = { ...defaults, ...loaded, ...overrides, root };
   for (const key of ["appDir", "publicDir", "out", "dist"]) {
     config[key] = resolve(root, config[key]);
   }
+  config.direct = Boolean(config.direct);
+  if (config.consolePort === null || Number.isNaN(config.consolePort)) config.consolePort = config.wsPort + 1;
   return config;
 }
 
@@ -100,7 +112,15 @@ switch (command) {
     /* The wire and the dev server fail in different ways and neither
      * covers the other: one asserts the patches, the other asserts
      * that every route actually answers. */
-    const wireCode = await phase(wire, [config.dist, "--ws", String(config.wsPort + 90)]);
+    /* The wire check follows the build's mode: a direct build puts the
+     * view on the console lane and the check has to listen there. The
+     * dev and hub checks assert the hub topology, so they pin it. */
+    const wireCode = await phase(wire, [
+      config.dist,
+      "--ws",
+      String(config.wsPort + 90),
+      ...(config.direct ? ["--console", String(config.consolePort + 90)] : []),
+    ]);
     const devCode = await phase(devside, [
       config.root,
       "--port",
@@ -176,9 +196,9 @@ switch (command) {
  * the app that are not the page: `"use server"` functions, the island
  * RPC, and `app/**​/route.js`.
  */
-async function start({ dist, port, wsPort, root: cwd }) {
+async function start({ dist, port, wsPort, direct, consolePort, root: cwd }) {
   const { createActions } = await import("../src/host/actions.mjs");
-  const { createHub } = await import("../src/host/bridge.mjs");
+  const { createHub, tapConsole } = await import("../src/host/bridge.mjs");
 
   const TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -198,9 +218,12 @@ async function start({ dist, port, wsPort, root: cwd }) {
   await actions.load(join(dist, "node.js"));
 
   /* Loopback: the browser talks to this process, and this process is
-   * the only peer on the isolate's portal. */
+   * the only peer on the isolate's tty. In direct mode the console lane
+   * is bound wide as well, and that is the one browsers dial. */
+  const lanes = ["-p", `tty:ws://127.0.0.1:${wsPort}`];
+  if (direct) lanes.push("-p", `console:ws://0.0.0.0:${consolePort}`);
   const spawnIsolate = () => {
-    const child = spawn("yeet", ["run", "-p", `tty:ws://127.0.0.1:${wsPort}`, join(dist, "server.js")], {
+    const child = spawn("yeet", ["run", ...lanes, join(dist, "server.js")], {
       cwd,
       stdio: "inherit",
     });
@@ -211,6 +234,9 @@ async function start({ dist, port, wsPort, root: cwd }) {
     return child;
   };
   const child = spawnIsolate();
+  const consoleTap = direct
+    ? tapConsole({ url: `ws://127.0.0.1:${consolePort}/`, onLine: (line) => log("isolate", line) })
+    : null;
 
   const readBody = (request) =>
     request.method === "GET" || request.method === "HEAD"
@@ -261,10 +287,13 @@ async function start({ dist, port, wsPort, root: cwd }) {
   });
   actions.useIsolate(hub.callIsolate);
 
-  server.listen(port, () => console.log(`yeetkit — http://localhost:${port}`));
+  server.listen(port, () =>
+    console.log(`yeetkit — http://localhost:${port}${direct ? ` (view direct from ws://<host>:${consolePort})` : ""}`),
+  );
 
   process.on("SIGINT", () => {
     hub.close();
+    consoleTap?.close();
     child.kill("SIGTERM");
     process.exit(0);
   });

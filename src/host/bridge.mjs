@@ -121,6 +121,41 @@ function framer(onFrame) {
   };
 }
 
+/* Direct mode moves the isolate's console lane onto a WebSocket, which
+ * takes `console.log` away from the terminal along with the view. This
+ * joins that lane as one more peer, discards the view frames, and hands
+ * back whatever the app itself printed — so a debugging line still
+ * lands in the dev log. Reconnects like the hub does, for the same
+ * reason.
+ */
+export function tapConsole({ url, onLine }) {
+  const FRAME = /\x1b\]7880;[^\x07]*\x07/g;
+  let socket = null;
+  let closed = false;
+
+  const connect = () => {
+    if (closed) return;
+    socket = new WebSocket(url);
+    socket.binaryType = "arraybuffer";
+    socket.addEventListener("message", (event) => {
+      const text = typeof event.data === "string" ? event.data : new TextDecoder().decode(new Uint8Array(event.data));
+      for (const line of text.replace(FRAME, "").split("\n")) {
+        if (line.length > 0) onLine(line);
+      }
+    });
+    socket.addEventListener("close", () => setTimeout(connect, 300));
+    socket.addEventListener("error", () => {});
+  };
+  connect();
+
+  return {
+    close() {
+      closed = true;
+      socket?.close();
+    },
+  };
+}
+
 export function createHub({ isolateUrl, server, path = "/@yeetkit/ws", actions, log }) {
   const browsers = new Set();
 

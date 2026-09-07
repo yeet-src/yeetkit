@@ -1,4 +1,12 @@
-/* Wires a Solid tree to the tty portal.
+/* Wires a Solid tree to the portal.
+ *
+ * Two lanes leave an isolate: the tty, which is bidirectional, and the
+ * console, which only goes out. By default everything rides the tty.
+ * In *direct* mode the view — the snapshot and every patch — is
+ * written to the console lane instead, which the browser dials itself,
+ * and the tty is left to the hub for what must stay private: `nodecall`
+ * and the per-caller replies. The hub still carries events up, since
+ * the console lane has no input side at all.
  *
  * The isolate cannot see a WebSocket connect, so the browser
  * announces itself: the client sends `hello` on open and on every
@@ -21,9 +29,14 @@ import { callAction, startStream } from "./rpc.js";
 import { setLocation, setNavigator } from "./router.js";
 
 export function mount(code, options = {}) {
-  const { title = "yeetkit", onKey = null, onAsk = null } = options;
+  const { title = "yeetkit", onKey = null, onAsk = null, direct = false } = options;
 
   let live = false;
+
+  /* Where the tree goes. Direct mode writes it as one console line per
+   * frame — the lane has no PTY, so the frame arrives intact — and
+   * every other frame in this file still uses `tty.write`. */
+  const view = direct ? (frame) => console.log(frame) : (frame) => tty.write(frame);
 
   /* Patches are batched per tick. One signal write can drive several
    * bindings and a stream drives one every few milliseconds; sending
@@ -38,7 +51,7 @@ export function mount(code, options = {}) {
     const batch = queue;
     queue = [];
     if (batch.length === 0 || !live) return;
-    tty.write(encodeFrame(batch.length === 1 ? batch[0] : { op: "batch", patches: batch }));
+    view(encodeFrame(batch.length === 1 ? batch[0] : { op: "batch", patches: batch }));
   };
 
   const send = (patch) => {
@@ -60,7 +73,7 @@ export function mount(code, options = {}) {
     /* Anything queued describes a tree the client has not seen; the
      * snapshot below already carries that state. */
     queue = [];
-    tty.write(encodeFrame({ op: "mount", title, root: serialize(ROOT) }));
+    view(encodeFrame({ op: "mount", title, root: serialize(ROOT) }));
   };
 
   /* An `ask` is the one thing on this wire that expects an answer,

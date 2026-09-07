@@ -5,7 +5,10 @@
  * frames down — so a pass means the wire works, not that the modules
  * import cleanly.
  *
- *   node src/cli/check.mjs <dist-dir> [--ws 3011]
+ *   node src/cli/check.mjs <dist-dir> [--ws 3011] [--console 3012]
+ *
+ * With `--console` the isolate is run in direct mode — its console lane
+ * on a second socket — and the view is expected there, and only there.
  */
 
 import { spawn } from "node:child_process";
@@ -18,6 +21,8 @@ const OSC_CLOSE = "\x07";
 const dist = resolve(process.argv[2] ?? "dist");
 const at = process.argv.indexOf("--ws");
 const wsPort = Number(at >= 0 ? process.argv[at + 1] : 3011);
+const consoleAt = process.argv.indexOf("--console");
+const consolePort = consoleAt >= 0 ? Number(process.argv[consoleAt + 1]) : null;
 
 const encode = (message) => {
   const bytes = new TextEncoder().encode(JSON.stringify(message));
@@ -61,40 +66,61 @@ const textOf = (node) =>
     .map((n) => n.text ?? "")
     .join("");
 
-const isolate = spawn("yeet", ["run", "-p", `tty:ws://0.0.0.0:${wsPort}`, join(dist, "server.js")], {
+const lanes = ["-p", `tty:ws://0.0.0.0:${wsPort}`];
+if (consolePort) lanes.push("-p", `console:ws://127.0.0.1:${consolePort}`);
+const isolate = spawn("yeet", ["run", ...lanes, join(dist, "server.js")], {
   stdio: ["ignore", "pipe", "pipe"],
 });
 isolate.stderr.on("data", (c) => process.stderr.write(`isolate: ${c}`));
 
 await wait(2500);
 
+const frames = [];
+/* Which lane each op arrived on, so direct mode can assert the view
+ * left the tty rather than merely that it arrived somewhere. */
+const seenOn = { tty: [], console: [] };
+
+const parser = (lane) => {
+  let pending = "";
+  return (event) => {
+    pending += typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data);
+    for (;;) {
+      const start = pending.indexOf(OSC_OPEN);
+      if (start < 0) return;
+      const end = pending.indexOf(OSC_CLOSE, start);
+      if (end < 0) return;
+      try {
+        const frame = JSON.parse(pending.slice(start + OSC_OPEN.length, end));
+        frames.push(frame);
+        seenOn[lane].push(frame.op);
+      } catch {
+        /* a torn frame is a real failure, but the assertions below are
+         * what should report it */
+      }
+      pending = pending.slice(end + OSC_CLOSE.length);
+    }
+  };
+};
+
 const socket = new WebSocket(`ws://127.0.0.1:${wsPort}/`);
 socket.binaryType = "arraybuffer";
-const frames = [];
-let pending = "";
+socket.addEventListener("message", parser("tty"));
 
-socket.addEventListener("message", (event) => {
-  pending += typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data);
-  for (;;) {
-    const start = pending.indexOf(OSC_OPEN);
-    if (start < 0) return;
-    const end = pending.indexOf(OSC_CLOSE, start);
-    if (end < 0) return;
-    try {
-      frames.push(JSON.parse(pending.slice(start + OSC_OPEN.length, end)));
-    } catch {
-      /* a torn frame is a real failure, but the assertions below are
-       * what should report it */
-    }
-    pending = pending.slice(end + OSC_CLOSE.length);
-  }
-});
+const opened = (ws, what) =>
+  new Promise((done, fail) => {
+    ws.addEventListener("open", done);
+    ws.addEventListener("error", fail);
+    setTimeout(() => fail(new Error(`${what} never accepted a connection`)), 8000);
+  });
 
-await new Promise((done, fail) => {
-  socket.addEventListener("open", done);
-  socket.addEventListener("error", fail);
-  setTimeout(() => fail(new Error("portal never accepted a connection")), 8000);
-});
+const ready = [opened(socket, "portal")];
+if (consolePort) {
+  const view = new WebSocket(`ws://127.0.0.1:${consolePort}/`);
+  view.binaryType = "arraybuffer";
+  view.addEventListener("message", parser("console"));
+  ready.push(opened(view, "console lane"));
+}
+await Promise.all(ready);
 
 const send = (message) => socket.send(encode(message));
 
@@ -112,6 +138,11 @@ let patches = await drain(1200);
 
 const mounted = patches.find((p) => p.op === "mount");
 check("hello is answered with a mount", Boolean(mounted));
+if (consolePort) {
+  console.log("\ndirect");
+  check("the view arrives on the console lane", seenOn.console.includes("mount"));
+  check("and not on the tty", !seenOn.tty.includes("mount") && !seenOn.tty.includes("batch"), seenOn.tty.join(","));
+}
 
 const tree = mounted ? flatten(mounted.root) : [];
 const page = textOf(mounted?.root);

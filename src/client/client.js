@@ -340,9 +340,49 @@ function reader() {
   };
 }
 
-export async function connect(url, mountPoint) {
-  root = mountPoint;
+/* One reconnecting socket. A dropped socket is the normal case in
+ * development — the dev server restarts the isolate on every edit — so
+ * reconnecting is routine, and the reconnect is what asks for a fresh
+ * tree.
+ */
+function lane(url, { onSocket, onOpen, onClose, onText }) {
   let backoff = 250;
+
+  const open = () => {
+    const ws = new WebSocket(url);
+    ws.binaryType = "arraybuffer";
+    onSocket(ws);
+
+    ws.addEventListener("open", () => {
+      backoff = 250;
+      onOpen();
+    });
+
+    ws.addEventListener("message", (event) => {
+      onText(
+        typeof event.data === "string"
+          ? event.data
+          : new TextDecoder().decode(new Uint8Array(event.data)),
+      );
+    });
+
+    ws.addEventListener("close", () => {
+      onClose();
+      setTimeout(open, backoff);
+      backoff = Math.min(backoff * 2, 4000);
+    });
+  };
+
+  open();
+}
+
+/* `url` is the hub: events go up it and private replies come down it.
+ * With `view` set — direct mode — the tree arrives on a second socket
+ * dialled straight to the isolate's console portal, and the hub's only
+ * downward traffic is what belongs to this browser alone.
+ */
+export async function connect(url, mountPoint, { view = null } = {}) {
+  root = mountPoint;
 
   /* Loaded before the socket, not after: the first frame may already
    * contain islands, and mounting them must not race the import. The
@@ -358,37 +398,43 @@ export async function connect(url, mountPoint) {
     console.error("yeetkit: island bundle failed to load", error);
   }
 
-  const open = () => {
-    socket = new WebSocket(url);
-    socket.binaryType = "arraybuffer";
-    const feed = reader();
-
-    socket.addEventListener("open", () => {
-      backoff = 250;
-      document.body.dataset.state = "connected";
-      up({ t: "hello", path: here() });
-    });
-
-    socket.addEventListener("message", (event) => {
-      feed(
-        typeof event.data === "string"
-          ? event.data
-          : new TextDecoder().decode(new Uint8Array(event.data)),
-      );
-    });
-
-    /* A dropped socket is the normal case in development — the dev
-     * server restarts the isolate on every edit — so reconnecting is
-     * routine and the reconnect is what asks for a fresh tree.
-     */
-    socket.addEventListener("close", () => {
-      document.body.dataset.state = "reconnecting";
-      setTimeout(open, backoff);
-      backoff = Math.min(backoff * 2, 4000);
-    });
+  /* `hello` is what sends the tree, and in direct mode the tree comes
+   * back on the other socket — so it waits until both are open, and is
+   * repeated whenever either one comes back. */
+  let viewOpen = view === null;
+  const hello = () => {
+    if (!viewOpen || socket?.readyState !== WebSocket.OPEN) return;
+    document.body.dataset.state = "connected";
+    up({ t: "hello", path: here() });
+  };
+  const dropped = () => {
+    document.body.dataset.state = "reconnecting";
   };
 
-  open();
+  lane(url, {
+    onSocket: (ws) => {
+      socket = ws;
+    },
+    onOpen: hello,
+    onClose: dropped,
+    onText: reader(),
+  });
+
+  if (view) {
+    lane(view, {
+      onSocket: () => {},
+      onOpen: () => {
+        viewOpen = true;
+        hello();
+      },
+      onClose: () => {
+        viewOpen = false;
+        dropped();
+      },
+      onText: reader(),
+    });
+  }
+
   interceptLinks();
   forwardKeys();
 }

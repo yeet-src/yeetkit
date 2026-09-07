@@ -376,7 +376,7 @@ export function islandsModule(islands, { root, out }) {
  * the wiring: point `serve()` at the router, hand it the routes the
  * `app/` tree produced, and park.
  */
-export async function entryModule({ title, appDir, out }) {
+export async function entryModule({ title, appDir, out, direct = false }) {
   /* Every `"use yeet"` module is imported for its side effect —
    * registering its exports — whether or not anything on this side
    * references it. Its callers are often an island or the host, and
@@ -393,6 +393,7 @@ ${imports}
 
 await serve(() => createComponent(Router, { routes, fallback: notFound }), {
   title: ${JSON.stringify(title)},
+  direct: ${direct ? "true" : "false"},
 });
 `;
 }

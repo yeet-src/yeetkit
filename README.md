@@ -169,6 +169,12 @@ layout. Both are resolved by the bundler and listed in `tsconfig.json` so
 the editor follows them too.
 
 A page gets `params` and `path`. A layout gets those plus `children`.
+
+Keys pressed outside an input reach the isolate too. `onKey(handler)`
+registers for them and returns the unregister — pair it with `onCleanup`
+so a route that is no longer shown stops answering to its shortcuts. A
+handler that returns `true` has taken the key, and handlers run newest
+first, which is what lets a menu own `j` and `k` while it is open.
 `<Link href>` is an ordinary anchor with an optional `activeClass` — the
 client intercepts internal clicks, so plain `<a href>` works too.
 

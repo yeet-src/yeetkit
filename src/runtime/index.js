@@ -8,6 +8,7 @@
 export * from "solid-js";
 export { Link, Router, location, navigate, params, useLocation, useParams, usePathname } from "./router.js";
 export { mount, serve } from "./mount.js";
+export { onKey } from "./keys.js";
 export { createProbe } from "./probe.js";
 export { createStopToken, readStream } from "./stream.js";
 export { ROOT, createComponent, createElement, insert, setProp, spread } from "./renderer.js";

@@ -22,6 +22,7 @@
  * anywhere in here.
  */
 
+import { dispatchKey } from "./keys.js";
 import { encodeFrame, uplinkReader } from "./protocol.js";
 import { ROOT, dispatch, render, serialize, setEmitter } from "./renderer.js";
 import { setWriter, settleNode } from "./node.js";
@@ -121,8 +122,10 @@ export function mount(code, options = {}) {
         case "event":
           dispatch(message);
           break;
+        /* Pages registered with `onKey` see it first; the mount option
+         * is for an app that wants one handler for everything. */
         case "key":
-          onKey?.(message);
+          if (!dispatchKey(message)) onKey?.(message);
           break;
         case "ask":
           answer(message);

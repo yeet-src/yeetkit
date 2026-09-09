@@ -187,8 +187,12 @@ export const {
       return;
     }
 
+    /* `false` travels as a value rather than as a removal. The browser
+     * client already treats it as "no attribute", and a target whose
+     * properties are typed — a QML mirror, say — needs to see the
+     * boolean rather than a deletion it can only read as "default". */
     const out = name === "style" ? styleText(value) : value;
-    if (out == null || out === false) delete node.attrs[name];
+    if (out == null) delete node.attrs[name];
     else node.attrs[name] = out;
 
     if (connected(node)) emit({ op: "attr", id: node.id, name, value: out ?? null });

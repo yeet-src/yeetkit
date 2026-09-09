@@ -9,7 +9,8 @@
   "exports": {
     ".": "./src/runtime/index.js",
     "./renderer": "./src/runtime/renderer.js",
-    "./client.js": "./src/client/client.js"
+    "./client.js": "./src/client/client.js",
+    "./src/*": "./src/*"
   },
   "files": [
     "bin",

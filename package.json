@@ -1,6 +1,7 @@
 {
   "name": "yeetkit",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "description": "SolidJS + Tailwind apps that run inside a yeet isolate and render into the browser over the tty portal.",
   "type": "module",
   "bin": {
@@ -15,7 +16,8 @@
   "files": [
     "bin",
     "src",
-    "templates"
+    "templates",
+    "LICENSE"
   ],
   "dependencies": {
     "@babel/core": "^7.26.0",

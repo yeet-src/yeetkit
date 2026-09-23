@@ -60,6 +60,9 @@ async function loadConfig(root) {
   if (flag("ws")) overrides.wsPort = Number(flag("ws"));
   if (flag("console")) overrides.consolePort = Number(flag("console"));
   if (flag("model")) overrides.model = flag("model");
+  /* `--isolate ws://host:port/path` dials an isolate somebody else runs
+   * — a `yeet service` route, typically — instead of spawning one. */
+  if (flag("isolate")) overrides.isolate = flag("isolate");
   /* Boolean flags take no value, so they are looked up by presence. */
   if (argv.includes("--direct")) overrides.direct = true;
   if (argv.includes("--no-direct")) overrides.direct = false;
@@ -196,7 +199,7 @@ switch (command) {
  * the app that are not the page: `"use server"` functions, the island
  * RPC, and `app/**​/route.js`.
  */
-async function start({ dist, port, wsPort, direct, consolePort, root: cwd }) {
+async function start({ dist, port, wsPort, direct, consolePort, isolate, root: cwd }) {
   const { createActions } = await import("../src/host/actions.mjs");
   const { createHub, tapConsole } = await import("../src/host/bridge.mjs");
 
@@ -233,10 +236,15 @@ async function start({ dist, port, wsPort, direct, consolePort, root: cwd }) {
     });
     return child;
   };
-  const child = spawnIsolate();
-  const consoleTap = direct
-    ? tapConsole({ url: `ws://127.0.0.1:${consolePort}/`, onLine: (line) => log("isolate", line) })
-    : null;
+  /* With `isolate` set the isolate is somebody else's to run — a
+   * `yeet service` unit behind a gateway route, restarted by the
+   * daemon — and this process is only its peer. */
+  const isolateUrl = isolate ?? `ws://127.0.0.1:${wsPort}/`;
+  const child = isolate ? null : spawnIsolate();
+  const consoleTap =
+    direct && !isolate
+      ? tapConsole({ url: `ws://127.0.0.1:${consolePort}/`, onLine: (line) => log("isolate", line) })
+      : null;
 
   const readBody = (request) =>
     request.method === "GET" || request.method === "HEAD"
@@ -280,7 +288,7 @@ async function start({ dist, port, wsPort, direct, consolePort, root: cwd }) {
   });
 
   const hub = createHub({
-    isolateUrl: `ws://127.0.0.1:${wsPort}/`,
+    isolateUrl,
     server,
     actions,
     log: () => {},
@@ -294,7 +302,7 @@ async function start({ dist, port, wsPort, direct, consolePort, root: cwd }) {
   process.on("SIGINT", () => {
     hub.close();
     consoleTap?.close();
-    child.kill("SIGTERM");
+    child?.kill("SIGTERM");
     process.exit(0);
   });
 }

@@ -244,6 +244,10 @@ export function createHub({ isolateUrl, server, path = "/@yeetkit/ws", actions, 
 
     socket.addEventListener("open", () => {
       ready = true;
+      /* First word on the wire: the isolate holds its `nodecall`s until
+       * it hears this, because a frame written before the hub attached
+       * is broadcast to nobody and the call waits out its timeout. */
+      socket.send(encodeUplink({ t: "hub" }));
       for (const message of outbox.splice(0)) socket.send(encodeUplink(message));
       /* A browser that was already here when the isolate restarted is
        * still waiting on a tree; asking on its behalf is what makes a
@@ -259,14 +263,21 @@ export function createHub({ isolateUrl, server, path = "/@yeetkit/ws", actions, 
       );
     });
 
-    socket.addEventListener("close", () => {
+    /* The isolate restarts on every edit in development, so a drop is
+     * the normal case rather than an error. Redialing in the gap
+     * before the new portal is listening fails at the handshake, and
+     * `ws` reports that as an `error` that is not always followed by a
+     * `close` — so both schedule the retry, and the flag keeps them
+     * from scheduling it twice. */
+    let scheduled = false;
+    const retry = () => {
       ready = false;
-      /* The isolate restarts on every edit in development, so this is
-       * the normal case rather than an error. */
+      if (scheduled) return;
+      scheduled = true;
       setTimeout(connect, 300);
-    });
-
-    socket.addEventListener("error", () => {});
+    };
+    socket.addEventListener("close", retry);
+    socket.addEventListener("error", retry);
   };
 
   connect();

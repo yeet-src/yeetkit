@@ -6,7 +6,23 @@
  * the first frame the isolate sends is already the right page.
  */
 
-export function indexHtml({ title, dev, direct = null }) {
+/* A `public/favicon.*` is the site's icon; without one the browser
+ * asks for /favicon.ico and gets the page shell, which is a wasted
+ * socket. Checked at start (and after a public/ change in dev). */
+export async function findIcon(publicDir) {
+  const { access } = await import("node:fs/promises");
+  for (const name of ["favicon.svg", "favicon.ico", "favicon.png"]) {
+    try {
+      await access(`${publicDir}/${name}`);
+      return `/${name}`;
+    } catch {
+      /* next */
+    }
+  }
+  return null;
+}
+
+export function indexHtml({ title, dev, direct = null, icon = null }) {
   /* Direct mode: the view comes straight from the isolate's console
    * portal, on the page's own host at the configured port. The hub
    * socket stays, for events and private replies. */
@@ -32,7 +48,7 @@ export function indexHtml({ title, dev, direct = null }) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(title)}</title>
-    <link rel="stylesheet" href="${css}" />
+    <link rel="stylesheet" href="${css}" />${icon ? `\n    <link rel="icon" href="${icon}" />` : ""}
     <style>
       /* The only styling that cannot wait for the socket: what the
          page looks like before, and between, connections. */

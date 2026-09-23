@@ -57,7 +57,15 @@ function up(message) {
  */
 const PROPERTIES = new Set(["value", "checked", "selected", "innerHTML", "disabled"]);
 
-function build(spec) {
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/* `ns` is the namespace the node is born into. An `<svg>` starts one,
+ * its descendants inherit it, and `<foreignObject>` hands back to
+ * HTML — the isolate's tree carries no namespace, since Solid's
+ * universal renderer never needed one, so it is recovered from the
+ * tags on this side. Without it an inline icon is an HTMLUnknownElement
+ * that draws nothing. */
+function build(spec, ns = null) {
   if (spec.text !== undefined) {
     const node = document.createTextNode(spec.text);
     node.__yid = spec.id;
@@ -65,13 +73,15 @@ function build(spec) {
     return node;
   }
 
-  const el = document.createElement(spec.tag);
+  const inSvg = spec.tag === "svg" || (ns === SVG_NS && spec.tag !== "foreignObject");
+  const el = inSvg ? document.createElementNS(SVG_NS, spec.tag) : document.createElement(spec.tag);
   el.__yid = spec.id;
   nodes.set(spec.id, el);
 
+  const kidNs = inSvg && spec.tag !== "foreignObject" ? SVG_NS : null;
   for (const [name, value] of Object.entries(spec.attrs ?? {})) setAttr(el, name, value);
   for (const type of spec.on ?? []) listen(spec.id, el, type);
-  for (const kid of spec.kids ?? []) el.appendChild(build(kid));
+  for (const kid of spec.kids ?? []) el.appendChild(build(kid, kidNs));
 
   /* A `"use client"` component. Its server-rendered children are
    * already attached above and are handed to the island as they are —
@@ -190,7 +200,9 @@ function apply(patch) {
     case "insert": {
       const parent = nodes.get(patch.parent);
       if (!parent) return;
-      const node = build(patch.node);
+      /* A node inserted under an existing `<svg>` inherits its
+       * namespace from the live parent. */
+      const node = build(patch.node, parent.namespaceURI === SVG_NS && parent.tagName !== "foreignObject" ? SVG_NS : null);
       const anchor = patch.before === null ? null : nodes.get(patch.before);
       parent.insertBefore(node, anchor ?? null);
       return;

@@ -407,6 +407,10 @@ export async function dev(config) {
         await writeEntry();
       }
 
+      /* The theme lives in the user's file; Tailwind watches a generated
+       * copy of it. */
+      if (changed.some((file) => file === join(appDir, "globals.css"))) await tailwind?.regenerate();
+
       if (changed.every(isBrowserSide)) reloadBrowsers();
       else await rebuild();
     },

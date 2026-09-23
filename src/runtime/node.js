@@ -16,6 +16,21 @@ let write = () => {
   throw new Error("the isolate is not mounted");
 };
 
+/* The tty is a broadcast, so a frame written before the hub has
+ * attached reaches nobody — and the page renders at boot, so an app's
+ * first `"use server"` call usually races the hub's reconnect. Calls
+ * are held here until the hub's `hub` greeting arrives. A call made
+ * while the hub is away still waits out its timeout: the isolate
+ * cannot see a peer leave, only one arrive. */
+let attached = false;
+const held = [];
+
+/** Routed here by `mount` when the hub announces itself. */
+export function hubAttached() {
+  attached = true;
+  for (const frame of held.splice(0)) write(frame);
+}
+
 /** Installed by `mount`, which owns the tty. */
 export const setWriter = (fn) => {
   write = fn;
@@ -39,7 +54,9 @@ export function nodeCall(action, args) {
     }, TIMEOUT_MS);
 
     pending.set(cid, { resolve, reject, timer });
-    write({ op: "nodecall", cid, action, args });
+    const frame = { op: "nodecall", cid, action, args };
+    if (attached) write(frame);
+    else held.push(frame);
   });
 }
 

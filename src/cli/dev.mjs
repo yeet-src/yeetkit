@@ -30,7 +30,7 @@ import { RUNTIME, createBundler, entryModule, islandsModule, nodeModule } from "
 import { createActions } from "../host/actions.mjs";
 import { createHub, tapConsole } from "../host/bridge.mjs";
 import { collectRoutes, patternOf, renderRouteModule } from "./routes.mjs";
-import { indexHtml } from "./html.mjs";
+import { findIcon, indexHtml } from "./html.mjs";
 import { startTailwind } from "./tailwind.mjs";
 import { sources, watchLoop } from "./watch.mjs";
 
@@ -419,7 +419,7 @@ export async function dev(config) {
   // ---- http ---------------------------------------------------------
 
   const clientJs = join(RUNTIME, "..", "client", "client.js");
-  const html = indexHtml({ title, dev: true, direct: direct ? consolePort : null });
+  const html = indexHtml({ title, dev: true, direct: direct ? consolePort : null, icon: await findIcon(publicDir) });
 
   /* Node's http server speaks streams; a route handler speaks
    * `Request`/`Response`. Translating here rather than in the handler

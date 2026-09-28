@@ -49,9 +49,8 @@ Or paste [EXPLORE.md](EXPLORE.md) into Claude and explore for yourself.
 ## The idea
 
 `yeet run -p tty:ws://0.0.0.0:3001 app.js` starts an isolate and redirects
-its tty to a WebSocket. That is the whole transport. The notebook uses it to
-put model-written instruments on a page; yeetkit uses it to put an
-application there.
+its tty to a WebSocket. That is the whole transport, and yeetkit uses it
+to put an application on a page.
 
 ```
   browser              node (the hub)              isolate
@@ -622,16 +621,22 @@ src/runtime/     isolate side — bundled into your app
   renderer.js    Solid's universal renderer, targeting the wire
   mount.js       portal wiring, patch batching, the hello handshake
   router.js      matching, nested layouts, Link
-  protocol.js    OSC framing (from yeet:notebook, unchanged)
+  protocol.js    OSC framing of frames on the tty
 src/client/      browser side — the 11kb mirror
 src/cli/         dev server, bundler, route generation, Tailwind, check
 ```
 
-`yeetkit check` is the test suite, in two phases. The first spawns a real
+`yeetkit check` is the test suite, in four phases. The first spawns a real
 isolate, connects a real socket, and asserts on the patches — that a click
 sends one text patch and not a re-render, that a shared layout survives a
 navigation. The second starts the dev server and fetches every asset with a
 timeout, because the ugliest failure mode on that side is not an error: a
 route that returns without writing a response leaves the browser waiting,
 and a render-blocking stylesheet that never arrives is a page that never
-paints.
+paints. The third mounts an island in a DOM and asserts that its own
+interactions produce no socket traffic at all; it is skipped when jsdom is
+not installed, which is the normal case in a user's project. The fourth
+checks the seams between the three runtimes: that a browser reaches the
+view without touching the isolate's portal, that a `"use server"` call is
+answered by Node, and that Node can ask the isolate something in the middle
+of it.

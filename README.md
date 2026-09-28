@@ -10,7 +10,7 @@ next to the kernel data they are displaying, and what crosses the wire is
 the handful of DOM mutations Solid's reactivity says are necessary.
 
 ```sh
-npm i -g --prefix ~/.local /home/jrg/src/yeetkit    # once
+npm i -g --prefix ~/.local /path/to/yeetkit    # once
 yeetkit new dashboard
 cd dashboard
 npm install          # links the framework; ~1s, no download

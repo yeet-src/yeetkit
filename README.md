@@ -9,8 +9,21 @@ inside. Your components never reach the browser. They execute on the host,
 next to the kernel data they are displaying, and what crosses the wire is
 the handful of DOM mutations Solid's reactivity says are necessary.
 
+![A yeetkit app: containers, tasks and per-container stats, live in a browser tab](docs/demo.gif)
+
+## Getting started
+
+yeet needs a Linux kernel, so do this on a Linux host (or a VM). The
+framework is not on npm yet; it runs from a checkout.
+
 ```sh
-npm i -g --prefix ~/.local /path/to/yeetkit    # once
+curl -fsSL https://yeet.cx | sh              # yeet, if it is not installed
+yeet login                                   # prints a link to open in your browser
+
+git clone https://github.com/yeet-src/yeetkit
+cd yeetkit && npm install                    # the framework's own dependencies
+npm i -g --prefix ~/.local .                 # `yeetkit` on PATH (needs ~/.local/bin on it)
+
 yeetkit new dashboard
 cd dashboard
 npm install          # links the framework; ~1s, no download
@@ -23,17 +36,12 @@ take effect with no reinstall, and `--prefix ~/.local` keeps it out of
 dashboard` does the same thing.
 
 Inside a project, `npm install` puts `yeetkit` on that project's own PATH,
-so `npm run dev`, `npm run build` and `npm run check` work from there.
-Needs `node` and `yeet` on `PATH`. yeet runs on Linux; to install it and
-log in:
-
-```sh
-curl -fsSL https://yeet.cx | sh
-yeet login          # prints a link to open in your browser
-```
-
-See the [installation docs](https://yeet.cx/docs/install/) for package
-managers and for running on macOS or Windows through Docker.
+so `npm run dev`, `npm run build` and `npm run check` work from there. An
+existing project can skip the checkout and depend on
+`"yeetkit": "github:yeet-src/yeetkit"` in its `package.json` instead.
+Needs `node` and `yeet` on `PATH`. See the yeet
+[installation docs](https://yeet.cx/docs/install/) for package managers
+and for running on macOS or Windows through Docker.
 
 ## What you can build
 
@@ -45,6 +53,14 @@ managers and for running on macOS or Windows through Docker.
   from the isolate that is already on the machine
 
 Or paste [EXPLORE.md](EXPLORE.md) into Claude and explore for yourself.
+
+[bomtastic](https://github.com/yeet-src/bomtastic) is a yeetkit app: a
+bill of materials for what is actually running on a host, read from
+`/proc` in the isolate, with the dependency graph drawn live.
+
+<p align="center">
+  <img src="docs/bomtastic.gif" alt="bomtastic: every running binary joined to the shared libraries it has mapped" width="860">
+</p>
 
 ## The idea
 

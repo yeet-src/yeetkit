@@ -24,7 +24,27 @@ dashboard` does the same thing.
 
 Inside a project, `npm install` puts `yeetkit` on that project's own PATH,
 so `npm run dev`, `npm run build` and `npm run check` work from there.
-Needs `node` and `yeet` on `PATH`.
+Needs `node` and `yeet` on `PATH`. yeet runs on Linux; to install it and
+log in:
+
+```sh
+curl -fsSL https://yeet.cx | sh
+yeet login          # prints a link to open in your browser
+```
+
+See the [installation docs](https://yeet.cx/docs/install/) for package
+managers and for running on macOS or Windows through Docker.
+
+## What you can build
+
+- a live `top` for one host: the process table sampled at 1 Hz, with only
+  the cells that moved crossing the wire
+- a control plane for a BPF probe: a form in the browser that patches the
+  program's globals, so the kernel filters before an event is ever written
+- a container board: every Docker container, its stats, its logs, streamed
+  from the isolate that is already on the machine
+
+Or paste [EXPLORE.md](EXPLORE.md) into Claude and explore for yourself.
 
 ## The idea
 

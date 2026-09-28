@@ -1,5 +1,12 @@
 # yeetkit
 
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-Linux-1793D1" alt="Linux">
+  <img src="https://img.shields.io/badge/built%20with-yeet%20%2B%20SolidJS-8A2BE2" alt="yeet + SolidJS">
+  <img src="https://img.shields.io/badge/license-Apache--2.0-3DA639" alt="Apache-2.0">
+  <a href="https://discord.gg/JxVseaAVAU"><img src="https://img.shields.io/badge/chat-Discord-5865F2" alt="Discord"></a>
+</p>
+
 SolidJS + Tailwind apps that run **inside a yeet isolate** and render into
 the browser over the tty portal.
 

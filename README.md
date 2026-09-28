@@ -22,23 +22,20 @@ yeet login                                   # prints a link to open in your bro
 
 git clone https://github.com/yeet-src/yeetkit
 cd yeetkit && npm install                    # the framework's own dependencies
-npm i -g --prefix ~/.local .                 # `yeetkit` on PATH (needs ~/.local/bin on it)
 
-yeetkit new dashboard
+npx . new dashboard                          # or `npx /path/to/yeetkit new dashboard` from anywhere
 cd dashboard
 npm install          # links the framework; ~1s, no download
 npm run dev          # http://localhost:3000
 ```
 
-The global install is a symlink to the checkout, so edits to the framework
-take effect with no reinstall, and `--prefix ~/.local` keeps it out of
-`/usr` — no root. Without installing at all, `npx /path/to/yeetkit new
-dashboard` does the same thing.
+The project's `package.json` points at the checkout with a `file:`
+dependency, so `npm install` symlinks it and puts `yeetkit` on the project's
+own PATH: `npm run dev`, `npm run build` and `npm run check` work from there,
+and an edit to the framework takes effect with no reinstall. An existing
+project can skip the checkout and depend on
+`"yeetkit": "github:yeet-src/yeetkit"` instead.
 
-Inside a project, `npm install` puts `yeetkit` on that project's own PATH,
-so `npm run dev`, `npm run build` and `npm run check` work from there. An
-existing project can skip the checkout and depend on
-`"yeetkit": "github:yeet-src/yeetkit"` in its `package.json` instead.
 Needs `node` and `yeet` on `PATH`. See the yeet
 [installation docs](https://yeet.cx/docs/install/) for package managers
 and for running on macOS or Windows through Docker.

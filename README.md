@@ -100,39 +100,6 @@ hydration: the bytes are proportional to what changed.
 Clicking the counter in the template sends one event up and produces
 exactly one patch back.
 
-## Direct
-
-An isolate has two lanes out, not one. The tty is the portal above:
-bidirectional, and the only lane with an input side. The console lane is
-`console.log`, it only goes out, and it can be bound to its own WebSocket
-just the same. `direct: true` in `yeetkit.config.js` — or `--direct` on
-the command line — splits the traffic across them:
-
-```
-  browser ◀── console:ws://0.0.0.0:3002 ──────────── isolate   the view
-  browser ──▶ node hub ──▶ tty:ws://127.0.0.1:3001    isolate   events, hello
-  node    ◀─▶ tty:ws://127.0.0.1:3001 ◀─────────────▶ isolate   nodecall, return, yield
-```
-
-The snapshot and every patch leave the isolate as one console line per
-frame and the browser dials that lane itself, so Node is out of the
-render path. Everything else is unchanged: events go up through the hub
-because the console lane cannot carry them, and `"use server"` calls and
-per-caller replies stay on the tty, where the hub is still the only
-peer. Nothing has to be banned, and `yeetkit check` asserts that a
-direct build's view arrives on the console lane and not on the tty.
-
-The page dials `ws://<its own host>:<console port>/`, which defaults to
-`ws + 1`; set `console:` to move it. The console lane has no PTY, so the
-frame needs no terminal escaping and arrives intact — but it is
-*dedicated* to the wire now: anything the app itself `console.log`s
-rides the same socket to every browser. The dev server taps the lane
-and prints those lines back to its own log, minus the frames, so a
-debugging line still shows up in the terminal; just know that it also
-showed up on the wire. And a page served over `https` cannot open a
-plain `ws://` socket, so in production the console port needs TLS in
-front of it or this stays a LAN feature.
-
 ## Why bother
 
 Because the data is on the host and nowhere else. An isolate has no
@@ -321,6 +288,33 @@ like a ring buffer, where the kernel already knows. And a stream is
 generator's `finally` runs. Without that a closed tab leaves a producer
 running for the life of the isolate.
 
+That cancellation has one rule. A stream that *waits* must be handed the
+stop token and wait on it:
+
+```js
+export async function* tail(stop) {
+  try {
+    for (;;) {
+      while (queue.length) yield queue.shift();
+      await stop.until(nextEvent());
+      if (stop.aborted) return;      // ← this is what runs the finally
+    }
+  } finally {
+    release();
+  }
+}
+```
+
+**`iterator.return()` is not enough, and the failure is silent.** A reader
+always has a `next()` in flight; a `return()` queues behind it; and a
+generator that loops without reaching a `yield` never settles that `next()`.
+On a quiet machine the return is never reached, the `finally` never runs,
+and the producer stays alive holding whatever it holds — a BPF program
+tracing the box for nobody. The token is appended by whatever drives the
+stream, so a generator that ignores it still works — it just is not
+cancellable. In a page, `readStream(open, onValue)` drives it and returns a
+stop function to hand to `onCleanup`.
+
 A stream is per-reader. Two tabs each get their own, and each numbers its
 own ids from 1 — the hub rewrites them on the way out and restores them on
 the way back, so a browser never sees another browser's values. `yeetkit
@@ -410,6 +404,39 @@ does:
 Your own forms do not need any of this — a `<form>` submits over the socket
 and a handler runs in the isolate with no round trip through HTTP.
 
+## Direct
+
+An isolate has two lanes out, not one. The tty is the portal from [The idea](#the-idea):
+bidirectional, and the only lane with an input side. The console lane is
+`console.log`, it only goes out, and it can be bound to its own WebSocket
+just the same. `direct: true` in `yeetkit.config.js` — or `--direct` on
+the command line — splits the traffic across them:
+
+```
+  browser ◀── console:ws://0.0.0.0:3002 ──────────── isolate   the view
+  browser ──▶ node hub ──▶ tty:ws://127.0.0.1:3001    isolate   events, hello
+  node    ◀─▶ tty:ws://127.0.0.1:3001 ◀─────────────▶ isolate   nodecall, return, yield
+```
+
+The snapshot and every patch leave the isolate as one console line per
+frame and the browser dials that lane itself, so Node is out of the
+render path. Everything else is unchanged: events go up through the hub
+because the console lane cannot carry them, and `"use server"` calls and
+per-caller replies stay on the tty, where the hub is still the only
+peer. Nothing has to be banned, and `yeetkit check` asserts that a
+direct build's view arrives on the console lane and not on the tty.
+
+The page dials `ws://<its own host>:<console port>/`, which defaults to
+`ws + 1`; set `console:` to move it. The console lane has no PTY, so the
+frame needs no terminal escaping and arrives intact — but it is
+*dedicated* to the wire now: anything the app itself `console.log`s
+rides the same socket to every browser. The dev server taps the lane
+and prints those lines back to its own log, minus the frames, so a
+debugging line still shows up in the terminal; just know that it also
+showed up on the wire. And a page served over `https` cannot open a
+plain `ws://` socket, so in production the console port needs TLS in
+front of it or this stays a LAN feature.
+
 ## BPF
 
 Put `*.bpf.c` in `bpf/` and `yeetkit dev` compiles it. Every unit is linked
@@ -489,33 +516,9 @@ exactly as long as the attachment, and a probe that stops forgets them.
 
 ### Cancelling a stream
 
-A stream that waits must be handed the stop token and wait on it:
-
-```js
-export async function* tail(stop) {
-  try {
-    for (;;) {
-      while (queue.length) yield queue.shift();
-      await stop.until(nextEvent());
-      if (stop.aborted) return;      // ← this is what runs the finally
-    }
-  } finally {
-    release();
-  }
-}
-```
-
-**`iterator.return()` is not enough, and the failure is silent.** A reader
-always has a `next()` in flight; a `return()` queues behind it; and a
-generator that loops without reaching a `yield` never settles that `next()`.
-On a quiet machine the return is never reached, the `finally` never runs,
-and the producer stays alive holding whatever it holds — a BPF program
-tracing the box for nobody.
-
-The token is appended by whatever drives the stream, so a generator that
-ignores it still works — it just is not cancellable, which is the thing this
-makes visible rather than silent. In a page, `readStream(open, onValue)`
-drives it and returns a stop function to hand to `onCleanup`.
+A `tail()` that waits on a ring buffer must wait on the stop token too, or
+a closed tab leaves the program attached with nobody reading it. The rule
+and the failure mode are under [Streams](#streams).
 
 ### Writing maps from the UI
 
@@ -646,17 +649,8 @@ src/client/      browser side — the 11kb mirror
 src/cli/         dev server, bundler, route generation, Tailwind, check
 ```
 
-`yeetkit check` is the test suite, in four phases. The first spawns a real
-isolate, connects a real socket, and asserts on the patches — that a click
-sends one text patch and not a re-render, that a shared layout survives a
-navigation. The second starts the dev server and fetches every asset with a
-timeout, because the ugliest failure mode on that side is not an error: a
-route that returns without writing a response leaves the browser waiting,
-and a render-blocking stylesheet that never arrives is a page that never
-paints. The third mounts an island in a DOM and asserts that its own
-interactions produce no socket traffic at all; it is skipped when jsdom is
-not installed, which is the normal case in a user's project. The fourth
-checks the seams between the three runtimes: that a browser reaches the
-view without touching the isolate's portal, that a `"use server"` call is
-answered by Node, and that Node can ask the isolate something in the middle
-of it.
+`yeetkit check` is the test suite, in four phases, one script each under
+`src/cli/`: the wire (a real isolate, a real socket, asserting on patches),
+the dev server (every asset fetched with a timeout), islands (a client
+component in a DOM, asserting no socket traffic), and the hub (the seams
+between browser, Node and isolate).

@@ -173,16 +173,21 @@ export const {
       return;
     }
 
-    if (name === "class") {
-      node._class = value;
+    /* A value the node already has is not a patch. The compiler wraps
+     * a lone dynamic prop in an effect that calls straight through —
+     * `effect(prev => setProp(el, "class", expr, prev))` — and
+     * `spread` re-applies every prop when any of them could have
+     * changed, so a `row()` accessor that swaps in a fresh object
+     * lands here once per attribute per tick with the same string as
+     * last time. The stored attribute is the reference, not Solid's
+     * `prev`: a spread's `prev` is its own bookkeeping and can differ
+     * from what actually went out. */
+    if (name === "class" || name === "classList") {
+      if (name === "class") node._class = value;
+      else node._classList = value;
+      const before = node.attrs.class ?? "";
       const next = recomputeClass(node);
-      if (connected(node)) emit({ op: "attr", id: node.id, name: "class", value: next });
-      return;
-    }
-
-    if (name === "classList") {
-      node._classList = value;
-      const next = recomputeClass(node);
+      if (next === before) return;
       if (connected(node)) emit({ op: "attr", id: node.id, name: "class", value: next });
       return;
     }
@@ -192,6 +197,8 @@ export const {
      * properties are typed — a QML mirror, say — needs to see the
      * boolean rather than a deletion it can only read as "default". */
     const out = name === "style" ? styleText(value) : value;
+    const before = node.attrs[name];
+    if (out == null ? before === undefined : before === out) return;
     if (out == null) delete node.attrs[name];
     else node.attrs[name] = out;
 

@@ -239,6 +239,19 @@ const rebuilt = patches.filter((p) => p.op === "insert").length;
 check("a live table produces patches", streamed + rebuilt > 0, "no readings — is yeetd running?");
 check("readings patch cells rather than rebuild rows", streamed > rebuilt, `${streamed} text vs ${rebuilt} insert`);
 
+/* The other half of the same claim. Every class on the procs table is
+ * a static string, yet each sample hands the renderer the same strings
+ * again — a lone dynamic prop's effect calls through unconditionally,
+ * and `Link`'s spread re-applies every prop — so a renderer that does
+ * not compare against what it already sent would emit a class patch
+ * per link per tick with nothing changed. */
+const resent = patches.filter((p) => p.op === "attr" && p.name === "class").length;
+check(
+  "an attribute that did not change is not re-sent",
+  resent === 0,
+  `${resent} class patches on a table whose classes are all static`,
+);
+
 /* BPF, if the project has any. The object is imported rather than
  * opened by path, so the thing under test is really the bundler: an
  * import written in `app/lib/` has to keep resolving from wherever the

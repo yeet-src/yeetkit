@@ -2,7 +2,7 @@
 #
 # The BPF program is modular: each bpf/*.bpf.c is a unit, compiled on
 # its own, and all units are statically linked into ONE loadable object,
-# bin/probe.bpf.o, with `bpftool gen object` — the same linker libbpf uses
+# bin/app.bpf.o, with `bpftool gen object` — the same linker libbpf uses
 # internally. Split the program across as many .bpf.c files as you like;
 # share structs, maps and helpers through headers in bpf/include/ and
 # the linker merges the duplicates. vmlinux.h (CO-RE) is generated there.

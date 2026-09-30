@@ -6,3 +6,4 @@ bin/*.bpf.o
 .build/
 bpf/include/vmlinux.h
 .clangd
+.kmatrix/

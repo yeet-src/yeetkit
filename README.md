@@ -446,6 +446,16 @@ through headers in `bpf/include/`. clang and bpftool come from the pinned
 static toolchain `build/toolchain.mk` fetches once into a shared cache, so
 there is no system C or BPF toolchain to install.
 
+A program that loads on your laptop can still be rejected by an older
+kernel's verifier, so every project ships
+`.github/workflows/kernel-matrix.yml`: on each push and pull request it builds
+the object, boots each kernel in `matrix.kernel` under
+[cilium's little-vm-helper](https://github.com/cilium/little-vm-helper), and
+runs the vendored static veristat against it, failing the job if any program
+is rejected. Edit the matrix to the kernels you care about. The same check
+runs locally with `make veristat` (this kernel only) or `make veristat-matrix`
+(the whole matrix, Linux with KVM).
+
 Then **import the object**:
 
 ```js

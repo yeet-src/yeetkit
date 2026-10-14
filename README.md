@@ -177,6 +177,13 @@ the editor follows them too.
 
 A page gets `params` and `path`. A layout gets those plus `children`.
 
+An attribute takes an expression or a getter: `class={on() ? "lit" : ""}`
+is made reactive by the compiler because it calls a signal, and
+`class={() => (on() ? "lit" : "")}` is made reactive by the renderer,
+which treats a function on a native attribute as a getter rather than
+a value. Event handlers (`onClick`) are the exception, and `ref` is
+left alone.
+
 Keys pressed outside an input reach the isolate too. `onKey(handler)`
 registers for them and returns the unregister — pair it with `onCleanup`
 so a route that is no longer shown stops answering to its shortcuts. A

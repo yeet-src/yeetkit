@@ -42,8 +42,10 @@ async function loadConfig(root) {
   };
 
   /* A config file is optional — the conventions above are the whole
-   * story for most projects — and a flag on the command line wins
-   * over it, so a second instance is `--port 3100 --ws 3101`.
+   * story for most projects. `PORT` in the environment beats the file,
+   * which is what a process manager or a container sets, and a flag on
+   * the command line beats both, so a second instance is
+   * `--port 3100 --ws 3101`.
    */
   let loaded = {};
   const file = join(root, "yeetkit.config.js");
@@ -52,6 +54,9 @@ async function loadConfig(root) {
   } catch (error) {
     if (error.code !== "ERR_MODULE_NOT_FOUND") throw error;
   }
+
+  const env = {};
+  if (process.env.PORT) env.port = Number(process.env.PORT);
 
   const overrides = {};
   if (loaded.ws !== undefined) overrides.wsPort = Number(loaded.ws);
@@ -64,7 +69,11 @@ async function loadConfig(root) {
   if (argv.includes("--direct")) overrides.direct = true;
   if (argv.includes("--no-direct")) overrides.direct = false;
 
-  const config = { ...defaults, ...loaded, ...overrides, root };
+  const config = { ...defaults, ...loaded, ...env, ...overrides, root };
+  if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) {
+    console.error(`yeetkit: port must be an integer 0-65535, got ${String(config.port)}`);
+    process.exit(1);
+  }
   for (const key of ["appDir", "publicDir", "out", "dist"]) {
     config[key] = resolve(root, config[key]);
   }

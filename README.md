@@ -160,6 +160,7 @@ app/
   (marketing)/page.jsx  /                    parens group without routing
 public/                 served as-is
 yeetkit.config.js       optional; title, port, ws, direct, console
+                        PORT in the environment beats the file, --port beats both
 ```
 
 Two aliases, the same ones a `yeet new` project uses:

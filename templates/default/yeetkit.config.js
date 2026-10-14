@@ -1,5 +1,7 @@
 export default {
   title: "yeetkit app",
+  /* The HTTP port. `PORT` in the environment overrides this, and
+   * `--port` on the command line overrides both. */
   port: 3000,
   /* The port the isolate's tty portal listens on. Loopback only: the
    * hub in the dev server is its one peer. */

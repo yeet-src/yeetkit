@@ -19,6 +19,7 @@
  * reachable parent carries the whole serialized subtree with it.
  */
 
+import { createRenderEffect } from "solid-js";
 import { createRenderer } from "solid-js/universal";
 
 let nextId = 1;
@@ -170,6 +171,18 @@ export const {
         (node.on ??= []).push(type);
         if (connected(node)) emit({ op: "listen", id: node.id, type });
       }
+      return;
+    }
+
+    /* A function on an attribute is a getter. `class={() => cond()}`
+     * reads naturally and the template writes it, but the compiler
+     * only wraps an attribute in an effect when the expression itself
+     * calls a signal; a function literal is a static value to it, and
+     * without this it would reach the wire as its own source text. So
+     * the renderer tracks it: the effect re-applies the attribute
+     * whenever a signal the getter read changes. */
+    if (typeof value === "function" && name !== "ref") {
+      createRenderEffect(() => setProp(node, name, value(), undefined));
       return;
     }
 

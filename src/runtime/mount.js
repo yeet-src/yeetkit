@@ -25,7 +25,7 @@
 import { dispatchKey } from "./keys.js";
 import { encodeFrame, uplinkReader } from "./protocol.js";
 import { ROOT, dispatch, render, serialize, setEmitter } from "./renderer.js";
-import { setWriter, settleNode } from "./node.js";
+import { setWriter, settleNode, hubAttached } from "./node.js";
 import { callAction, startStream } from "./rpc.js";
 import { setLocation, setNavigator } from "./router.js";
 
@@ -133,6 +133,11 @@ export function mount(code, options = {}) {
         /* The hub answering a call this isolate made. */
         case "noderesult":
           settleNode(message);
+          break;
+        /* The hub attached (or re-attached): release any `"use server"`
+         * call that was made before there was anyone to hear it. */
+        case "hub":
+          hubAttached();
           break;
         /* Something calling a `"use yeet"` function. The reply is
          * written directly rather than queued: it belongs to one

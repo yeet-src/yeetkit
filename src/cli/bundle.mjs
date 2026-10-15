@@ -391,7 +391,11 @@ import { routes, notFound } from "./routes.js";
 import { createComponent } from "yeetkit/renderer";
 ${imports}
 
-await serve(() => createComponent(Router, { routes, fallback: notFound }), {
+/* Not awaited: \`serve\` never settles, and a module parked in a
+ * top-level await never finishes evaluating — which \`yeet run\` does
+ * not mind, but a \`yeet service\` unit stays \`evaluating\` and its
+ * route never comes up. The portal keeps the isolate alive. */
+serve(() => createComponent(Router, { routes, fallback: notFound }), {
   title: ${JSON.stringify(title)},
   direct: ${direct ? "true" : "false"},
 });

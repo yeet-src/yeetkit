@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { OBJECT, hasBpf, make, place } from "./bpf.mjs";
 import { RUNTIME, createBundler, entryModule, islandsModule, nodeModule } from "./bundle.mjs";
 import { collectRoutes, renderRouteModule } from "./routes.mjs";
-import { indexHtml } from "./html.mjs";
+import { findIcon, indexHtml } from "./html.mjs";
 import { startTailwind } from "./tailwind.mjs";
 
 export async function build(config) {
@@ -119,7 +119,10 @@ export async function build(config) {
   await startTailwind({ root, appDir, out, watch: false });
   await cp(join(out, "styles.css"), join(dist, "styles.css")).catch(() => {});
   await cp(join(RUNTIME, "..", "client", "client.js"), join(dist, "client.js"));
-  await writeFile(join(dist, "index.html"), indexHtml({ title, dev: false, direct: direct ? consolePort : null }));
+  await writeFile(
+    join(dist, "index.html"),
+    indexHtml({ title, dev: false, direct: direct ? consolePort : null, icon: await findIcon(publicDir) }),
+  );
   await cp(publicDir, dist, { recursive: true }).catch(() => {});
 
   const bpfSize = (await readFile(join(dist, "bin", OBJECT)).catch(() => "")).length;

@@ -44,20 +44,29 @@ export async function startTailwind({ root, appDir, out, watch, onBuild, log }) 
     return null;
   }
 
-  const user = await readFile(join(appDir, "globals.css"), "utf8").catch(() => null);
   const base = `@import ${JSON.stringify(tailwindCss)};`;
-
-  /* Scanning is anchored to `app/` absolutely, so it does not depend
-   * on where the generated file ended up or on the user remembering
-   * an `@source`. */
-  const body = user
-    ? TAILWIND_IMPORT.test(user)
-      ? user.replace(TAILWIND_IMPORT, base)
-      : `${base}\n${user}`
-    : base;
-
   const input = join(appDir, GENERATED);
-  await writeFile(input, `${body}\n@source ${JSON.stringify(appDir)};\n`);
+
+  /* The generated input is what the CLI watches, so an edit to
+   * `globals.css` has to be copied into it or the theme never changes
+   * until the next start. `regenerate` is that copy; the dev server
+   * calls it when the watcher sees the user's file move. */
+  const regenerate = async () => {
+    const user = await readFile(join(appDir, "globals.css"), "utf8").catch(() => null);
+    /* A global regex remembers where its last match ended; reset it,
+     * or every second regeneration would miss the import. */
+    TAILWIND_IMPORT.lastIndex = 0;
+    /* Scanning is anchored to `app/` absolutely, so it does not depend
+     * on where the generated file ended up or on the user remembering
+     * an `@source`. */
+    const body = user
+      ? TAILWIND_IMPORT.test(user)
+        ? user.replace(TAILWIND_IMPORT, base)
+        : `${base}\n${user}`
+      : base;
+    await writeFile(input, `${body}\n@source ${JSON.stringify(appDir)};\n`);
+  };
+  await regenerate();
 
   const output = join(out, "styles.css");
   const argv = [bin, "--input", input, "--output", output];
@@ -93,5 +102,5 @@ export async function startTailwind({ root, appDir, out, watch, onBuild, log }) 
     return null;
   }
 
-  return { stop: () => child.kill("SIGTERM") };
+  return { stop: () => child.kill("SIGTERM"), regenerate };
 }

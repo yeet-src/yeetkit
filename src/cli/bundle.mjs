@@ -312,7 +312,13 @@ export async function createBundler({ entry, outfile, dev, onRebuild, root, appD
     /* The isolate's console is the only place a stack trace lands, so
      * development keeps names and skips minification. */
     minify: !dev && !node,
-    sourcemap: dev ? "inline" : false,
+    /* Development keeps source maps, but where they live depends on who
+     * reads them. The isolate and Node only ever show a stack trace, so
+     * theirs are inline. The browser downloads the island bundle on
+     * every load, and an inline map is most of its bytes — so that one
+     * is linked: a `.map` beside the file, fetched only when DevTools
+     * asks for it. */
+    sourcemap: dev ? (client ? "linked" : "inline") : false,
     keepNames: dev,
     /* `yeet:ai`, `yeet:bpf`, `yeet:graph` and friends are provided by
      * the host and must survive bundling untouched. In the client

@@ -126,6 +126,36 @@ if (ready) {
   check("client.js responds", client.status === 200, `status ${client.status}`);
   check("client.js is the client", /export (async )?function connect/.test(client.body));
 
+  /* A refresh from another machine is paid in bundle bytes, so an
+   * asset has to be cheap to fetch twice: a tag to revalidate against,
+   * and gzip when the browser takes it. */
+  const head = async (path, extra = {}) => {
+    try {
+      const response = await fetch(`http://localhost:${port}${path}`, {
+        signal: AbortSignal.timeout(5000),
+        headers: { "accept-encoding": "gzip", ...extra },
+      });
+      return { status: response.status, etag: response.headers.get("etag"), encoding: response.headers.get("content-encoding") };
+    } catch (error) {
+      return { status: 0, error: error.name };
+    }
+  };
+  const first = await head("/@yeetkit/client.js");
+  check("client.js carries an ETag", !!first.etag, JSON.stringify(first));
+  check("client.js is gzipped when accepted", first.encoding === "gzip", `content-encoding ${first.encoding}`);
+  const second = await head("/@yeetkit/client.js", { "if-none-match": first.etag ?? "" });
+  check("an unchanged client.js revalidates as 304", second.status === 304, `status ${second.status}`);
+
+  /* The island bundle's map is linked, so the bundle itself does not
+   * carry it — and the map has to answer where the link points. */
+  const bundle = await get("/@yeetkit/islands.js");
+  check("the island bundle responds", bundle.status === 200, `status ${bundle.status}`);
+  if (!bundle.body.includes("export const empty")) {
+    check("the island bundle links its source map rather than inlining it", !bundle.body.includes("sourceMappingURL=data:"));
+    const map = await get("/@yeetkit/islands.js.map");
+    check("the island source map responds", map.status === 200 && map.body.startsWith("{"), `status ${map.status}`);
+  }
+
   check("the stylesheet responds", styles.status === 200, `status ${styles.status || "no response"}`);
   check(
     "the stylesheet has Tailwind in it",

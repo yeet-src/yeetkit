@@ -24,13 +24,33 @@ const KNOWN = new Set(["use client", "use server", "use yeet"]);
  * sitting in the middle of a file from meaning anything.
  */
 export function directiveOf(source) {
-  const prologue = /^\s*(?:(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/)\s*)*(?:(['"])([^'"]*)\1\s*;?\s*)+/.exec(source);
-  if (!prologue) return null;
+  /* Read only the string-literal statements of the prologue, skipping
+   * the comments between them — a directive token quoted inside a
+   * leading comment (`calls a "use server" action`) must not be read as
+   * the module's own directive. */
+  let i = 0;
+  const skipTrivia = () => {
+    for (;;) {
+      const before = i;
+      while (i < source.length && /\s/.test(source[i])) i++;
+      if (source.startsWith("//", i)) {
+        const nl = source.indexOf("\n", i);
+        i = nl < 0 ? source.length : nl;
+      } else if (source.startsWith("/*", i)) {
+        const end = source.indexOf("*/", i);
+        i = end < 0 ? source.length : end + 2;
+      }
+      if (i === before) return;
+    }
+  };
 
-  for (const match of prologue[0].matchAll(/(['"])([^'"]*)\1/g)) {
-    if (KNOWN.has(match[2])) return match[2];
+  for (;;) {
+    skipTrivia();
+    const stmt = /^(['"])([^'"]*)\1\s*;?/.exec(source.slice(i));
+    if (!stmt) return null;
+    if (KNOWN.has(stmt[2])) return stmt[2];
+    i += stmt[0].length;
   }
-  return null;
 }
 
 /* The export names, so the server pass can stand in a placeholder for

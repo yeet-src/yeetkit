@@ -21,9 +21,11 @@
  */
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join, normalize, relative } from "node:path";
+import { gzipSync } from "node:zlib";
 
 import { OBJECT, hasBpf, make, place } from "./bpf.mjs";
 import { RUNTIME, createBundler, entryModule, islandsModule, nodeModule } from "./bundle.mjs";
@@ -54,6 +56,29 @@ const TYPES = {
   ".webp": "image/webp",
   ".ico": "image/x-icon",
   ".woff2": "font/woff2",
+};
+
+/* A refresh is paid in bytes, and the browser is not always on this
+ * machine: over a relayed tunnel the island bundle alone can take
+ * longer than the isolate takes to boot. So every asset carries an
+ * ETag and goes out gzipped when the browser accepts it — a second
+ * load of an unchanged bundle is a 304 and no body at all. The text
+ * types compress about four to one; images and fonts already are. */
+const COMPRESSIBLE = new Set([TYPES[".html"], TYPES[".js"], TYPES[".css"], TYPES[".json"], TYPES[".svg"]]);
+const etagOf = (body) => `"${createHash("sha1").update(body).digest("base64url")}"`;
+
+/* Compressed bodies by tag, so the bundle is deflated once per build
+ * rather than once per request. A rebuild makes a new tag, which is
+ * why the map is bounded instead of keyed forever. */
+const compressed = new Map();
+const gzipped = (etag, body) => {
+  let out = compressed.get(etag);
+  if (!out) {
+    out = gzipSync(body);
+    compressed.set(etag, out);
+    if (compressed.size > 16) compressed.delete(compressed.keys().next().value);
+  }
+  return out;
 };
 
 const color = process.env.NO_COLOR === undefined && (process.env.FORCE_COLOR !== undefined || process.stdout.isTTY);
@@ -467,15 +492,33 @@ export async function dev(config) {
       return;
     }
 
+    /* `no-cache`, not `no-store`: the browser keeps what it has and
+     * asks whether it changed, and the tag is what answers. */
+    const send = (body, type) => {
+      const etag = etagOf(body);
+      if (request.headers["if-none-match"] === etag) {
+        response.writeHead(304, { etag, "cache-control": "no-cache" });
+        response.end();
+        return;
+      }
+      const headers = { "content-type": type, "cache-control": "no-cache", etag, vary: "accept-encoding" };
+      if (COMPRESSIBLE.has(type) && /\bgzip\b/.test(request.headers["accept-encoding"] ?? "")) {
+        headers["content-encoding"] = "gzip";
+        body = gzipped(etag, body);
+      }
+      response.writeHead(200, headers);
+      response.end(body);
+    };
+
     const serve = async (file, type) => {
+      let body;
       try {
-        const body = await readFile(file);
-        response.writeHead(200, { "content-type": type, "cache-control": "no-store" });
-        response.end(body);
-        return true;
+        body = await readFile(file);
       } catch {
         return false;
       }
+      send(body, type);
+      return true;
     };
 
     /* Every branch below must end in a response. A route that returns
@@ -497,16 +540,26 @@ export async function dev(config) {
       if (!(await serve(join(out, "islands.js"), TYPES[".js"]))) {
         /* An app with no islands still has to get a module back — the
          * client imports it unconditionally. */
-        response.writeHead(200, { "content-type": TYPES[".js"], "cache-control": "no-store" });
-        response.end("export const empty = true;\n");
+        send("export const empty = true;\n", TYPES[".js"]);
+      }
+      return;
+    }
+
+    /* The island bundle's source map, linked rather than inline so it
+     * only crosses the wire when DevTools opens. A missing map is a
+     * 404 and not the page shell, which DevTools would try to parse
+     * as JSON. */
+    if (path === "/@yeetkit/islands.js.map") {
+      if (!(await serve(join(out, "islands.js.map"), TYPES[".json"]))) {
+        response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+        response.end("no source map\n");
       }
       return;
     }
 
     if (path === "/@yeetkit/styles.css") {
       if (!(await serve(join(out, "styles.css"), TYPES[".css"]))) {
-        response.writeHead(200, { "content-type": TYPES[".css"], "cache-control": "no-store" });
-        response.end("/* yeetkit: no stylesheet yet */\n");
+        send("/* yeetkit: no stylesheet yet */\n", TYPES[".css"]);
       }
       return;
     }
@@ -521,8 +574,7 @@ export async function dev(config) {
       }
     }
 
-    response.writeHead(200, { "content-type": TYPES[".html"], "cache-control": "no-store" });
-    response.end(html);
+    send(html, TYPES[".html"]);
   });
 
   /* The hub attaches to the same HTTP server the page came from, so a

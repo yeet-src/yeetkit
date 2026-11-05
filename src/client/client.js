@@ -82,11 +82,32 @@ function build(spec) {
 }
 
 /* Islands are optional, so the module is loaded once and only used if
- * the app actually has any. */
+ * the app actually has any. It is also the largest thing the page
+ * downloads, so the tree does not wait for it: a marker that arrives
+ * before the module is parked here and mounted the moment it lands. */
 let islands = null;
+let loading = true;
+const parked = new Set();
 
 function mountIsland(el) {
-  islands?.mount(el, el.getAttribute("data-island"), el.getAttribute("data-props"));
+  if (islands) islands.mount(el, el.getAttribute("data-island"), el.getAttribute("data-props"));
+  else if (loading) parked.add(el);
+}
+
+function islandsLoaded(loaded) {
+  loading = false;
+  if (loaded?.mount) {
+    islands = loaded;
+    islands.setTransport(up);
+  }
+  /* Read in insertion order, with the props as they stand now — a
+   * `data-props` patch that arrived in the meantime is already on the
+   * element. A marker the tree has since removed is skipped: mounting
+   * into a detached node would be a root nothing ever disposes. */
+  for (const el of parked) {
+    if (el.isConnected) mountIsland(el);
+  }
+  parked.clear();
 }
 
 function setAttr(el, name, value) {
@@ -158,7 +179,10 @@ function unlisten(id, type) {
  * difference between a list re-render being linear and quadratic.
  */
 function forget(node) {
-  if (node.tagName === "YEET-ISLAND") islands?.unmount(node);
+  if (node.tagName === "YEET-ISLAND") {
+    parked.delete(node);
+    islands?.unmount(node);
+  }
   const id = node.__yid;
   if (id !== undefined) {
     nodes.delete(id);
@@ -384,19 +408,17 @@ function lane(url, { onSocket, onOpen, onClose, onText }) {
 export async function connect(url, mountPoint, { view = null } = {}) {
   root = mountPoint;
 
-  /* Loaded before the socket, not after: the first frame may already
-   * contain islands, and mounting them must not race the import. The
-   * module always exists — an app with no `"use client"` gets an empty
-   * one — so a failure here is a real failure, not an absence. */
-  try {
-    const loaded = await import(globalThis.__yeetkitIslands ?? "/@yeetkit/islands.js");
-    if (loaded.mount) {
-      islands = loaded;
-      islands.setTransport(up);
-    }
-  } catch (error) {
+  /* Started first and not awaited: the sockets open while the bundle
+   * is still on the wire, so the server-rendered tree paints before
+   * the island code arrives rather than after. The first frames may
+   * already contain islands; `mountIsland` parks those and the import
+   * settling is what mounts them, so nothing races. The module always
+   * exists — an app with no `"use client"` gets an empty one — so a
+   * failure here is a real failure, not an absence. */
+  import(globalThis.__yeetkitIslands ?? "/@yeetkit/islands.js").then(islandsLoaded, (error) => {
     console.error("yeetkit: island bundle failed to load", error);
-  }
+    islandsLoaded(null);
+  });
 
   /* `hello` is what sends the tree, and in direct mode the tree comes
    * back on the other socket — so it waits until both are open, and is

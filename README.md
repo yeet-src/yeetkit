@@ -8,7 +8,7 @@
 </p>
 
 SolidJS + Tailwind apps that run **inside a yeet isolate** and render into
-the browser over the tty portal.
+the browser over named portals.
 
 The framework is Next-shaped on the outside — `app/` directory, file-system
 routes, nested layouts, `yeetkit dev` — and something else entirely on the
@@ -68,9 +68,11 @@ bill of materials for what is actually running on a host, read from
 
 ## The idea
 
-`yeet run -p tty:ws://0.0.0.0:3001 app.js` starts an isolate and redirects
-its tty to a WebSocket. That is the whole transport, and yeetkit uses it
-to put an application on a page.
+A script in an isolate can open a *named portal* — `new Portal("view")` —
+and `yeet run -p view:ws://127.0.0.1:3001/view app.js` binds that name to
+a WebSocket. Whoever connects is a peer of its own, and whole messages go
+each way. That is the whole transport, and yeetkit uses it to put an
+application on a page.
 
 ```
   browser              node (the hub)              isolate
@@ -82,12 +84,18 @@ to put an application on a page.
                        └──────────────────┘
 ```
 
-Node sits in the middle. It terminates the isolate's portal — which is a
-tty, and therefore a broadcast — and re-serves browsers itself, so it
-decides what they ever see. That is what makes a private channel possible:
-a `"use server"` call's arguments cross the portal but are consumed by the
-hub and forwarded to nobody. It also means the isolate binds to loopback
-and a browser never touches it.
+Node sits in the middle. The isolate opens two portals — `hub` for control
+and `view` for the tree — and Node binds both to loopback and re-serves
+browsers itself, so it decides what they ever see. That is what keeps the
+private channel private: a `"use server"` call's arguments are written to
+`hub`, consumed there, and forwarded to nobody. It also means a browser
+never touches the isolate.
+
+Control and data are separate sockets on purpose. A snapshot of a large
+page is one large message, and a reply written behind it on the same
+socket waits for all of it; on its own socket it does not. Calls, replies,
+streams and `nodecall` ride `hub`; the snapshot and every patch ride
+`view`.
 
 
 Solid does not require a DOM. Its `universal` renderer takes nine
@@ -159,7 +167,7 @@ app/
   docs/[...path]/page.jsx  /docs/*           props.params.path (an array)
   (marketing)/page.jsx  /                    parens group without routing
 public/                 served as-is
-yeetkit.config.js       optional; title, port, ws, direct, console
+yeetkit.config.js       optional; title, port, ws, direct, view
                         PORT in the environment beats the file, --port beats both
 ```
 
@@ -407,36 +415,28 @@ and a handler runs in the isolate with no round trip through HTTP.
 
 ## Direct
 
-An isolate has two lanes out, not one. The tty is the portal from [The idea](#the-idea):
-bidirectional, and the only lane with an input side. The console lane is
-`console.log`, it only goes out, and it can be bound to its own WebSocket
-just the same. `direct: true` in `yeetkit.config.js` — or `--direct` on
-the command line — splits the traffic across them:
+The tree already leaves the isolate on a portal of its own, so who dials
+that portal is only a matter of where it is bound. `direct: true` in
+`yeetkit.config.js` — or `--direct` on the command line — binds `view`
+wide, on its own port, and lets browsers dial it themselves:
 
 ```
-  browser ◀── console:ws://0.0.0.0:3002 ──────────── isolate   the view
-  browser ──▶ node hub ──▶ tty:ws://127.0.0.1:3001    isolate   events, hello
-  node    ◀─▶ tty:ws://127.0.0.1:3001 ◀─────────────▶ isolate   nodecall, return, yield
+  browser ◀── view:ws://0.0.0.0:3002/view ─────────── isolate   the view
+  browser ──▶ node hub ──▶ hub:ws://127.0.0.1:3001/hub isolate   events, hello
+  node    ◀─▶ hub:ws://127.0.0.1:3001/hub ◀──────────▶ isolate   nodecall, return, yield
 ```
 
-The snapshot and every patch leave the isolate as one console line per
-frame and the browser dials that lane itself, so Node is out of the
-render path. Everything else is unchanged: events go up through the hub
-because the console lane cannot carry them, and `"use server"` calls and
-per-caller replies stay on the tty, where the hub is still the only
-peer. Nothing has to be banned, and `yeetkit check` asserts that a
-direct build's view arrives on the console lane and not on the tty.
+Node is out of the render path. Everything else is unchanged: events go up
+through the hub, and `"use server"` calls and per-caller replies stay on
+`hub`, where Node is still the only peer — a browser is let in to exactly
+one thing, and it can only read it. `yeetkit check` asserts that the tree
+arrives on `view` and that no reply ever does.
 
-The page dials `ws://<its own host>:<console port>/`, which defaults to
-`ws + 1`; set `console:` to move it. The console lane has no PTY, so the
-frame needs no terminal escaping and arrives intact — but it is
-*dedicated* to the wire now: anything the app itself `console.log`s
-rides the same socket to every browser. The dev server taps the lane
-and prints those lines back to its own log, minus the frames, so a
-debugging line still shows up in the terminal; just know that it also
-showed up on the wire. And a page served over `https` cannot open a
-plain `ws://` socket, so in production the console port needs TLS in
-front of it or this stays a LAN feature.
+The page dials `ws://<its own host>:<view port>/view`, which defaults to
+`ws + 1`; set `view:` to move it. The app's own `console.log` is untouched
+and lands in the terminal as usual. A page served over `https` cannot open
+a plain `ws://` socket, so in production the view port needs TLS in front
+of it or this stays a LAN feature.
 
 ## BPF
 
@@ -627,8 +627,8 @@ adds a route with no restart of anything you have to think about.
 **One isolate is one running application, shared by everyone connected.**
 (`"use client"` is the exception, and the reason it exists: island state is
 per-browser.)
-The portal is a tty and a tty is a broadcast: two tabs are two views of the
-same state, not two sessions. For an instrument — a dashboard, an internal
+There is one tree, and every viewer is written the same patches: two tabs
+are two views of the same state, not two sessions. For an instrument — a dashboard, an internal
 tool, something watching a host — that is the useful behaviour and the
 reason there is no per-request rendering anywhere in here. It is the wrong
 shape for a public multi-user site, and no amount of configuration changes
@@ -655,7 +655,7 @@ src/runtime/     isolate side — bundled into your app
   renderer.js    Solid's universal renderer, targeting the wire
   mount.js       portal wiring, patch batching, the hello handshake
   router.js      matching, nested layouts, Link
-  protocol.js    OSC framing of frames on the tty
+  protocol.js    the portal names, and JSON frames
 src/client/      browser side — the 11kb mirror
 src/cli/         dev server, bundler, route generation, Tailwind, check
 ```

@@ -1,48 +1,27 @@
 #!/usr/bin/env node
-/* End-to-end check: a real isolate, a real portal, the real protocol.
+/* End-to-end check: a real isolate, real portals, the real protocol.
  *
- * Speaks exactly what the browser speaks — base64url uplink, OSC
- * frames down — so a pass means the wire works, not that the modules
- * import cleanly.
+ * Speaks exactly what the hub speaks — one JSON message per WebSocket
+ * message, control on `hub` and the tree on `view` — so a pass means
+ * the wire works, not that the modules import cleanly.
  *
- *   node src/cli/check.mjs <dist-dir> [--ws 3011] [--console 3012]
+ *   node src/cli/check.mjs <dist-dir> [--ws 3011] [--view 3012]
  *
- * With `--console` the isolate is run in direct mode — its console lane
- * on a second socket — and the view is expected there, and only there.
+ * With `--view` the isolate is bound as direct mode binds it — `view`
+ * on a port of its own. Either way the tree is expected on `view`, and
+ * only there.
  */
 
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 
-const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-const OSC_OPEN = "\x1b]7880;";
-const OSC_CLOSE = "\x07";
+import { lanes } from "../host/bridge.mjs";
 
 const dist = resolve(process.argv[2] ?? "dist");
 const at = process.argv.indexOf("--ws");
 const wsPort = Number(at >= 0 ? process.argv[at + 1] : 3011);
-const consoleAt = process.argv.indexOf("--console");
-const consolePort = consoleAt >= 0 ? Number(process.argv[consoleAt + 1]) : null;
-
-const encode = (message) => {
-  const bytes = new TextEncoder().encode(JSON.stringify(message));
-  let out = "";
-  let bits = 0;
-  let width = 0;
-  for (const byte of bytes) {
-    bits = (bits << 8) | byte;
-    width += 8;
-    while (width >= 6) {
-      width -= 6;
-      out += B64[(bits >> width) & 0x3f];
-    }
-  }
-  if (width > 0) out += B64[(bits << (6 - width)) & 0x3f];
-  /* A newline is what the terminal input decoder turns into the
-   * `Enter` that terminates a message, and the frame goes as bytes:
-   * this direction is parsed as tty input, not as text. */
-  return new TextEncoder().encode(`${out}\n`);
-};
+const viewAt = process.argv.indexOf("--view");
+const viewPort = viewAt >= 0 ? Number(process.argv[viewAt + 1]) : null;
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -66,9 +45,9 @@ const textOf = (node) =>
     .map((n) => n.text ?? "")
     .join("");
 
-const lanes = ["-p", `tty:ws://0.0.0.0:${wsPort}`];
-if (consolePort) lanes.push("-p", `console:ws://127.0.0.1:${consolePort}`);
-const isolate = spawn("yeet", ["run", ...lanes, join(dist, "server.js")], {
+const bound = lanes({ wsPort, direct: viewPort !== null, viewPort: viewPort ?? undefined });
+const viewUrl = bound.viewUrl ?? `ws://127.0.0.1:${viewPort}/view`;
+const isolate = spawn("yeet", ["run", ...bound.args, join(dist, "server.js")], {
   stdio: ["ignore", "pipe", "pipe"],
 });
 isolate.stderr.on("data", (c) => process.stderr.write(`isolate: ${c}`));
@@ -76,53 +55,38 @@ isolate.stderr.on("data", (c) => process.stderr.write(`isolate: ${c}`));
 await wait(2500);
 
 const frames = [];
-/* Which lane each op arrived on, so direct mode can assert the view
- * left the tty rather than merely that it arrived somewhere. */
-const seenOn = { tty: [], console: [] };
+/* Which portal each op arrived on, so the split can be asserted: the
+ * tree on `view`, everything addressed to a caller on `hub`. */
+const seenOn = { hub: [], view: [] };
+/* When each frame landed, for the priority check further down. */
+const arrivals = [];
 
-const parser = (lane) => {
-  let pending = "";
-  return (event) => {
-    pending += typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data);
-    for (;;) {
-      const start = pending.indexOf(OSC_OPEN);
-      if (start < 0) return;
-      const end = pending.indexOf(OSC_CLOSE, start);
-      if (end < 0) return;
-      try {
-        const frame = JSON.parse(pending.slice(start + OSC_OPEN.length, end));
-        frames.push(frame);
-        seenOn[lane].push(frame.op);
-      } catch {
-        /* a torn frame is a real failure, but the assertions below are
-         * what should report it */
-      }
-      pending = pending.slice(end + OSC_CLOSE.length);
-    }
-  };
+const parser = (lane) => (event) => {
+  try {
+    const frame = JSON.parse(event.data);
+    frames.push(frame);
+    seenOn[lane].push(frame.op);
+    arrivals.push({ lane, op: frame.op, cid: frame.cid, at: performance.now(), size: event.data.length });
+  } catch {
+    /* a torn frame is a real failure, but the assertions below are
+     * what should report it */
+  }
 };
-
-const socket = new WebSocket(`ws://127.0.0.1:${wsPort}/`);
-socket.binaryType = "arraybuffer";
-socket.addEventListener("message", parser("tty"));
 
 const opened = (ws, what) =>
   new Promise((done, fail) => {
     ws.addEventListener("open", done);
-    ws.addEventListener("error", fail);
+    ws.addEventListener("error", () => fail(new Error(`${what} refused the connection`)));
     setTimeout(() => fail(new Error(`${what} never accepted a connection`)), 8000);
   });
 
-const ready = [opened(socket, "portal")];
-if (consolePort) {
-  const view = new WebSocket(`ws://127.0.0.1:${consolePort}/`);
-  view.binaryType = "arraybuffer";
-  view.addEventListener("message", parser("console"));
-  ready.push(opened(view, "console lane"));
-}
-await Promise.all(ready);
+const socket = new WebSocket(bound.isolateUrl);
+socket.addEventListener("message", parser("hub"));
+const view = new WebSocket(viewUrl);
+view.addEventListener("message", parser("view"));
+await Promise.all([opened(socket, "the hub portal"), opened(view, "the view portal")]);
 
-const send = (message) => socket.send(encode(message));
+const send = (message) => socket.send(JSON.stringify(message));
 
 /* Everything the batching queue produced for one interaction, drained
  * after giving the isolate a moment to answer. */
@@ -138,11 +102,10 @@ let patches = await drain(1200);
 
 const mounted = patches.find((p) => p.op === "mount");
 check("hello is answered with a mount", Boolean(mounted));
-if (consolePort) {
-  console.log("\ndirect");
-  check("the view arrives on the console lane", seenOn.console.includes("mount"));
-  check("and not on the tty", !seenOn.tty.includes("mount") && !seenOn.tty.includes("batch"), seenOn.tty.join(","));
-}
+
+console.log("\nportals");
+check("the tree arrives on the view portal", seenOn.view.includes("mount"));
+check("and not on the hub portal", !seenOn.hub.includes("mount") && !seenOn.hub.includes("batch"), seenOn.hub.join(","));
 
 const tree = mounted ? flatten(mounted.root) : [];
 const page = textOf(mounted?.root);
@@ -378,6 +341,25 @@ if (marker) {
   check("it ran in the isolate", typeof reply?.value === "number", reply?.error ?? "");
 }
 
+/* Control and data are separate sockets so that one never waits on
+ * the other. Asked for together — a full snapshot, then a call — the
+ * reply has to come back on `hub`, and nothing addressed to a caller
+ * may ever have shown up on `view`. */
+console.log("\npriority");
+arrivals.length = 0;
+send({ t: "hello", path: "/" });
+send({ t: "call", cid: 77, action: "app/lib/host.js#processCount", args: [] });
+await drain(2500);
+const snap = arrivals.find((a) => a.op === "mount");
+const answered = arrivals.find((a) => a.op === "return" && a.cid === 77);
+check("a reply and a snapshot asked for together both arrive", Boolean(snap && answered));
+check("the reply is on the hub portal, the snapshot on view", answered?.lane === "hub" && snap?.lane === "view");
+check(
+  "no reply ever rode the view portal",
+  !seenOn.view.some((op) => op === "return" || op === "yield" || op === "answer" || op === "nodecall"),
+  seenOn.view.filter((op) => op !== "mount" && op !== "batch").join(","),
+);
+
 send({ t: "nav", path: "/nowhere" });
 patches = await drain(900);
 check(
@@ -387,5 +369,6 @@ check(
 
 console.log(`\n${failures === 0 ? "all checks passed" : `${failures} failed`}\n`);
 socket.close();
+view.close();
 isolate.kill("SIGTERM");
 process.exit(failures === 0 ? 0 : 1);

@@ -5,17 +5,10 @@
  * owns the two things the isolate cannot see — the URL bar and the
  * connection itself.
  *
- * The socket is a tty portal, so the framing is asymmetric and
- * deliberately odd: patches come down inside an OSC escape sequence
- * (the only way a payload survives terminal output processing), and
- * events go up as base64url characters, one synthetic `keydown` per
- * character, because the terminal input decoder is what parses this
- * direction and it surfaces nothing else.
+ * Both sockets it may hold — the hub's, and in direct mode the
+ * isolate's `view` portal — carry one JSON message per WebSocket
+ * message, as text. There is no framing to do.
  */
-
-const OSC_OPEN = "\x1b]7880;";
-const OSC_CLOSE = "\x07";
-const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 const nodes = new Map();
 let socket = null;
@@ -23,29 +16,8 @@ let root = null;
 
 // ---- uplink ---------------------------------------------------------
 
-function encodeUplink(message) {
-  const bytes = new TextEncoder().encode(JSON.stringify(message));
-  let out = "";
-  let bits = 0;
-  let width = 0;
-
-  for (const byte of bytes) {
-    bits = (bits << 8) | byte;
-    width += 8;
-    while (width >= 6) {
-      width -= 6;
-      out += B64[(bits >> width) & 0x3f];
-    }
-  }
-  if (width > 0) out += B64[(bits << (6 - width)) & 0x3f];
-  /* A newline is what the terminal input decoder turns into the
-   * `Enter` that terminates a message, and the frame goes as bytes:
-   * this direction is parsed as tty input, not as text. */
-  return new TextEncoder().encode(`${out}\n`);
-}
-
 function up(message) {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(encodeUplink(message));
+  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
 
 // ---- applying patches -----------------------------------------------
@@ -331,37 +303,15 @@ function forwardKeys() {
 
 // ---- the socket -----------------------------------------------------
 
-/* Frames arrive as tty bytes, so a payload can be split across
- * messages; the tail is kept until its terminator shows up.
- */
-function reader() {
-  let pending = "";
-
-  return (chunk) => {
-    pending += chunk;
-
-    for (;;) {
-      const start = pending.indexOf(OSC_OPEN);
-      if (start < 0) {
-        /* Nothing framed in here — but the opening sequence may be
-         * split across the boundary, so a short tail is kept. */
-        pending = pending.slice(-OSC_OPEN.length);
-        return;
-      }
-      const end = pending.indexOf(OSC_CLOSE, start);
-      if (end < 0) {
-        pending = pending.slice(start);
-        return;
-      }
-      const body = pending.slice(start + OSC_OPEN.length, end);
-      pending = pending.slice(end + OSC_CLOSE.length);
-      try {
-        apply(JSON.parse(body));
-      } catch (error) {
-        console.error("yeetkit — bad frame", error, body.slice(0, 200));
-      }
-    }
-  };
+function receive(text) {
+  let patch;
+  try {
+    patch = JSON.parse(text);
+  } catch (error) {
+    console.error("yeetkit — bad frame", error, text.slice(0, 200));
+    return;
+  }
+  apply(patch);
 }
 
 /* One reconnecting socket. A dropped socket is the normal case in
@@ -402,7 +352,7 @@ function lane(url, { onSocket, onOpen, onClose, onText }) {
 
 /* `url` is the hub: events go up it and private replies come down it.
  * With `view` set — direct mode — the tree arrives on a second socket
- * dialled straight to the isolate's console portal, and the hub's only
+ * dialled straight to the isolate's `view` portal, and the hub's only
  * downward traffic is what belongs to this browser alone.
  */
 export async function connect(url, mountPoint, { view = null } = {}) {
@@ -439,7 +389,7 @@ export async function connect(url, mountPoint, { view = null } = {}) {
     },
     onOpen: hello,
     onClose: dropped,
-    onText: reader(),
+    onText: receive,
   });
 
   if (view) {
@@ -453,7 +403,7 @@ export async function connect(url, mountPoint, { view = null } = {}) {
         viewOpen = false;
         dropped();
       },
-      onText: reader(),
+      onText: receive,
     });
   }
 

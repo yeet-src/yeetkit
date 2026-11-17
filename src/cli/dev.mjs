@@ -1,9 +1,9 @@
 /* The dev loop.
  *
- * `yeet run --watch` cannot drive this: it refuses to respawn a run
- * whose tty is redirected, and this one's tty *is* the transport. So
- * the supervision happens here, and edits fall into two kinds that
- * need different answers:
+ * `yeet run --watch` is not what drives this: a restart has to wait
+ * for the rebuild that caused it, and only some edits need one. So the
+ * supervision happens here, and edits fall into two kinds that need
+ * different answers:
  *
  *   isolate-side   anything the app bundle contains. Rebuild, then
  *                  restart the run. The page's socket drops, the
@@ -30,7 +30,7 @@ import { gzipSync } from "node:zlib";
 import { OBJECT, hasBpf, make, place } from "./bpf.mjs";
 import { RUNTIME, createBundler, entryModule, islandsModule, nodeModule } from "./bundle.mjs";
 import { createActions } from "../host/actions.mjs";
-import { createHub, tapConsole } from "../host/bridge.mjs";
+import { createHub, lanes } from "../host/bridge.mjs";
 import { collectRoutes, patternOf, renderRouteModule } from "./routes.mjs";
 import { indexHtml } from "./html.mjs";
 import { startTailwind } from "./tailwind.mjs";
@@ -135,7 +135,8 @@ function routeTable(rows) {
 }
 
 export async function dev(config) {
-  const { root, appDir, publicDir, out, port, wsPort, title, model, direct, consolePort } = config;
+  const { root, appDir, publicDir, out, port, wsPort, title, model, direct, viewPort } = config;
+  const { args: portals, isolateUrl, viewUrl } = lanes({ wsPort, direct, viewPort });
 
   await mkdir(out, { recursive: true });
 
@@ -156,7 +157,7 @@ export async function dev(config) {
   const printRoutes = () => {
     const rows = routeSummary.map((path) => ["GET", path, "page"]);
     rows.push(["WS", "/@yeetkit/ws", direct ? "browser \u2192 hub \u2192 isolate" : "hub \u2194 isolate"]);
-    if (direct) rows.push(["WS", `ws://<host>:${consolePort}/`, "isolate \u2192 browser, direct"]);
+    if (direct) rows.push(["WS", `ws://<host>:${viewPort}/view`, "isolate \u2192 browser, direct"]);
     rows.push(["GET", "/@yeetkit/client.js", "browser client"]);
     rows.push(["GET", "/@yeetkit/styles.css", "tailwind"]);
     rows.push([
@@ -225,7 +226,7 @@ export async function dev(config) {
   await buildBpf();
   await writeRoutes();
   const writeEntry = async () =>
-    writeFile(join(out, "entry.jsx"), await entryModule({ title, appDir, out, direct }));
+    writeFile(join(out, "entry.jsx"), await entryModule({ title, appDir, out }));
   await writeEntry();
 
   // ---- bundle -------------------------------------------------------
@@ -350,12 +351,10 @@ export async function dev(config) {
 
   const startIsolate = (attempt = 0) => {
     const startedAt = Date.now();
-    /* Loopback, not 0.0.0.0: the browser does not talk to the tty lane,
-     * the hub does, and it is in this process. In direct mode the
-     * console lane is the one browsers dial, so it binds wide. */
-    const argv = ["run", "-p", `tty:ws://127.0.0.1:${wsPort}`];
-    if (direct) argv.push("-p", `console:ws://0.0.0.0:${consolePort}`);
-    argv.push(bundlePath);
+    /* Loopback, not 0.0.0.0: the browser does not talk to the isolate's
+     * portals, the hub does, and it is in this process. In direct mode
+     * `view` is the one browsers dial, so that one binds wide. */
+    const argv = ["run", ...portals, bundlePath];
     if (model) argv.push("--", "--model", model);
 
     child = spawn("yeet", argv, { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
@@ -396,12 +395,6 @@ export async function dev(config) {
 
   startIsolate();
 
-  /* With the console lane on a socket, the app's own `console.log` no
-   * longer reaches stdout above; this fetches it back, minus the view. */
-  const consoleTap = direct
-    ? tapConsole({ url: `ws://127.0.0.1:${consolePort}/`, onLine: (line) => log("isolate", dim(line)) })
-    : null;
-
   // ---- watching -----------------------------------------------------
 
   const isBrowserSide = (file) =>
@@ -440,7 +433,7 @@ export async function dev(config) {
   // ---- http ---------------------------------------------------------
 
   const clientJs = join(RUNTIME, "..", "client", "client.js");
-  const html = indexHtml({ title, dev: true, direct: direct ? consolePort : null });
+  const html = indexHtml({ title, dev: true, direct: direct ? viewPort : null });
 
   /* Node's http server speaks streams; a route handler speaks
    * `Request`/`Response`. Translating here rather than in the handler
@@ -580,7 +573,8 @@ export async function dev(config) {
   /* The hub attaches to the same HTTP server the page came from, so a
    * browser needs one origin and no second port. */
   const hub = createHub({
-    isolateUrl: `ws://127.0.0.1:${wsPort}/`,
+    isolateUrl,
+    viewUrl,
     server,
     actions: actionRuntime,
     log: () => {},
@@ -598,7 +592,6 @@ export async function dev(config) {
     child?.kill("SIGTERM");
     tailwind?.stop();
     hub?.close();
-    consoleTap?.close();
     bundler.dispose();
     islandBundler?.dispose();
     nodeBundler?.dispose();

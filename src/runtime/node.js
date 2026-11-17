@@ -2,21 +2,19 @@
  *
  * A `"use server"` function runs in the Node process, because that is
  * where `fs`, `fetch` and npm are. The isolate reaches it over the
- * same portal the browser used to connect to — except the browser no
- * longer does. Node terminates the portal and re-serves browsers
- * itself, so a `nodecall` frame is consumed by the hub and never
- * reaches anyone else. The isolate broadcasts, but there is only one
- * listener.
+ * `hub` portal, which Node binds to loopback and holds for itself —
+ * browsers are re-served by Node, or in direct mode dial a different
+ * portal altogether. So a `nodecall` frame is consumed by the hub and
+ * never reaches anyone else.
  *
- * The reply comes back on the uplink, which is per-peer, and Node is
- * the peer.
+ * The reply comes back from the same peer.
  */
 
 let write = () => {
   throw new Error("the isolate is not mounted");
 };
 
-/** Installed by `mount`, which owns the tty. */
+/** Installed by `mount`, which owns the portals. */
 export const setWriter = (fn) => {
   write = fn;
 };

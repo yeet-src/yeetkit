@@ -2,38 +2,36 @@
  *
  *   browser <-ws-> node <-ws-> isolate
  *
- * The isolate's portal is a tty, and a tty is a broadcast — everything
- * on it reaches every peer. So Node takes the portal for itself, binds
- * it to loopback, and becomes the only peer there is. Browsers connect
- * to this process instead, and what they receive is what the hub
- * decides to pass on.
+ * The isolate opens a named portal, `hub`, and Node binds it to
+ * loopback and becomes the only peer on it. Browsers connect to this
+ * process instead, and what they receive is what the hub decides to
+ * pass on.
  *
- * That is what makes a private channel possible at all. A `nodecall`
- * frame from the isolate is consumed here and forwarded to nobody; the
- * arguments of a `"use server"` call never reach a browser, even
- * though the isolate wrote them to a broadcast.
+ * That is what keeps the private channel private. A `nodecall` frame
+ * from the isolate is consumed here and forwarded to nobody; the
+ * arguments of a `"use server"` call never reach a browser, because
+ * no browser is ever a peer of the portal they are written to.
  *
  * Three kinds of traffic pass through:
  *
- *   view      patches down, events up — relayed untouched, which is
- *             why the browser client did not have to change beyond
- *             the address it dials.
+ *   view      patches down, events up — relayed untouched. In direct
+ *             mode the patches skip this process: browsers dial the
+ *             isolate's `view` portal for them.
  *   nodecall  the isolate asking the host to run a `"use server"`
- *             function. Consumed here, answered on the uplink.
+ *             function. Consumed here, answered on the same socket.
  *   yeetcall  the host asking the isolate to run a `"use yeet"` one.
  *             Sent up, and its `return` frame is caught on the way
  *             back rather than relayed.
+ *
+ * Both sockets carry one JSON message per WebSocket message, as text.
  */
 
 import { WebSocketServer } from "ws";
 
-const OSC_OPEN = "\x1b]7880;";
-const OSC_CLOSE = "\x07";
-const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-/* Every request that crosses to the isolate is tagged with who asked,
- * because the way back is a broadcast and the reply belongs to one
- * caller.
+/* Every request that crosses to the isolate is tagged with who asked.
+ * The isolate replies to the peer that asked — but every browser is
+ * behind the same peer, this one, and the reply belongs to one of
+ * them.
  *
  * It also fixes a collision that is easy to miss: each browser counts
  * its own ids from 1, so two tabs both have a `cid: 1` in flight. The
@@ -48,107 +46,64 @@ const BROWSER_CID = /^b(\d+):(.*)$/;
  * should get a number back, or its own map lookup misses. */
 const coerce = (text) => (/^\d+$/.test(text) ? Number(text) : text);
 
-const encodeFrame = (message) => `${OSC_OPEN}${ascii(JSON.stringify(message))}${OSC_CLOSE}`;
+const encode = (message) => JSON.stringify(message);
 
-function ascii(json) {
-  let out = "";
-  for (let i = 0; i < json.length; i += 1) {
-    const code = json.charCodeAt(i);
-    out += code > 0x7e ? `\\u${code.toString(16).padStart(4, "0")}` : json[i];
+const decode = (data) => {
+  try {
+    return JSON.parse(typeof data === "string" ? data : new TextDecoder().decode(data));
+  } catch {
+    return null; // not a message; dropped rather than fatal
   }
-  return out;
-}
+};
 
-function encodeUplink(message) {
-  const bytes = new TextEncoder().encode(JSON.stringify(message));
-  let out = "";
-  let bits = 0;
-  let width = 0;
-
-  for (const byte of bytes) {
-    bits = (bits << 8) | byte;
-    width += 8;
-    while (width >= 6) {
-      width -= 6;
-      out += B64[(bits >> width) & 0x3f];
-    }
-  }
-  if (width > 0) out += B64[(bits << (6 - width)) & 0x3f];
-  return new TextEncoder().encode(`${out}\n`);
-}
-
-function decodeUplink(text) {
-  const bytes = [];
-  let bits = 0;
-  let width = 0;
-  for (const character of text) {
-    const value = B64.indexOf(character);
-    if (value < 0) continue;
-    bits = (bits << 6) | value;
-    width += 6;
-    if (width >= 8) {
-      width -= 8;
-      bytes.push((bits >> width) & 0xff);
-    }
-  }
-  return new TextDecoder().decode(new Uint8Array(bytes));
-}
-
-/* Frames arrive as tty bytes and can be split across messages. */
-function framer(onFrame) {
-  let pending = "";
-  return (chunk) => {
-    pending += chunk;
-    for (;;) {
-      const start = pending.indexOf(OSC_OPEN);
-      if (start < 0) {
-        pending = pending.slice(-OSC_OPEN.length);
-        return;
-      }
-      const end = pending.indexOf(OSC_CLOSE, start);
-      if (end < 0) {
-        pending = pending.slice(start);
-        return;
-      }
-      const body = pending.slice(start + OSC_OPEN.length, end);
-      pending = pending.slice(end + OSC_CLOSE.length);
-      try {
-        onFrame(JSON.parse(body));
-      } catch {
-        // A torn frame is dropped rather than fatal.
-      }
-    }
+/* Where the isolate's two portals are bound, and how Node reaches
+ * them — in one place, because `dev`, `start` and the checks all have
+ * to agree with the names the runtime opens.
+ *
+ * Both sit on the loopback port by default, told apart by path. In
+ * direct mode `view` moves to its own port, bound wide, and `viewUrl`
+ * is null: the tree does not pass through Node at all.
+ */
+export function lanes({ wsPort, direct = false, viewPort = wsPort + 1 }) {
+  const hub = `127.0.0.1:${wsPort}/hub`;
+  const view = direct ? `0.0.0.0:${viewPort}/view` : `127.0.0.1:${wsPort}/view`;
+  return {
+    args: ["-p", `hub:ws://${hub}`, "-p", `view:ws://${view}`],
+    isolateUrl: `ws://${hub}`,
+    viewUrl: direct ? null : `ws://${view}`,
   };
 }
 
-/* Direct mode moves the isolate's console lane onto a WebSocket, which
- * takes `console.log` away from the terminal along with the view. This
- * joins that lane as one more peer, discards the view frames, and hands
- * back whatever the app itself printed — so a debugging line still
- * lands in the dev log. Reconnects like the hub does, for the same
- * reason.
- */
-export function tapConsole({ url, onLine }) {
-  const FRAME = /\x1b\]7880;[^\x07]*\x07/g;
+/* One reconnecting socket to a portal. The isolate restarts on every
+ * edit in development, and its listener answers 502 until the script
+ * has opened the name, so a refused or dropped socket is the normal
+ * case rather than an error. */
+function dial(url, { onOpen, onFrame, onClose }) {
   let socket = null;
   let closed = false;
 
   const connect = () => {
     if (closed) return;
-    socket = new WebSocket(url);
-    socket.binaryType = "arraybuffer";
-    socket.addEventListener("message", (event) => {
-      const text = typeof event.data === "string" ? event.data : new TextDecoder().decode(new Uint8Array(event.data));
-      for (const line of text.replace(FRAME, "").split("\n")) {
-        if (line.length > 0) onLine(line);
-      }
+    const ws = new WebSocket(url);
+    socket = ws;
+    ws.addEventListener("open", () => onOpen?.());
+    ws.addEventListener("message", (event) => {
+      const frame = decode(event.data);
+      if (frame) onFrame(frame);
     });
-    socket.addEventListener("close", () => setTimeout(connect, 300));
-    socket.addEventListener("error", () => {});
+    ws.addEventListener("close", () => {
+      onClose?.();
+      setTimeout(connect, 300);
+    });
+    ws.addEventListener("error", () => {});
   };
   connect();
 
   return {
+    get open() {
+      return socket?.readyState === 1;
+    },
+    send: (message) => socket.send(encode(message)),
     close() {
       closed = true;
       socket?.close();
@@ -156,12 +111,17 @@ export function tapConsole({ url, onLine }) {
   };
 }
 
-export function createHub({ isolateUrl, server, path = "/@yeetkit/ws", actions, log }) {
+/* `isolateUrl` is the isolate's `hub` portal: control. `viewUrl` is its
+ * `view` portal: the tree. They are two sockets so a reply never waits
+ * behind a snapshot. In direct mode `viewUrl` is null — browsers dial
+ * that portal themselves and the tree does not come through here. */
+export function createHub({ isolateUrl, viewUrl = null, server, path = "/@yeetkit/ws", actions, log }) {
   const browsers = new Set();
 
-  let socket = null;
-  let ready = false;
   const outbox = []; // uplink messages waiting for the isolate to come back
+  /* Where the browsers last said they were, for asking again on their
+   * behalf when the isolate comes back. */
+  let lastPath = "/";
 
   let nextHostCall = 1;
   const hostCalls = new Map();
@@ -172,7 +132,7 @@ export function createHub({ isolateUrl, server, path = "/@yeetkit/ws", actions, 
   // ---- to the isolate ------------------------------------------------
 
   const toIsolate = (message) => {
-    if (ready && socket?.readyState === 1) socket.send(encodeUplink(message));
+    if (control.open) control.send(message);
     else outbox.push(message);
   };
 
@@ -194,7 +154,7 @@ export function createHub({ isolateUrl, server, path = "/@yeetkit/ws", actions, 
   // ---- from the isolate ----------------------------------------------
 
   const toBrowsers = (frame) => {
-    const bytes = encodeFrame(frame);
+    const bytes = encode(frame);
     for (const browser of browsers) {
       if (browser.readyState === 1) browser.send(bytes);
     }
@@ -228,7 +188,7 @@ export function createHub({ isolateUrl, server, path = "/@yeetkit/ws", actions, 
         const browser = byNumber.get(Number(tagged[1]));
         if (browser?.readyState === 1) {
           /* The id the browser chose, not the one the hub sent. */
-          browser.send(encodeFrame({ ...frame, [key]: coerce(tagged[2]) }));
+          browser.send(encode({ ...frame, [key]: coerce(tagged[2]) }));
         }
         return;
       }
@@ -237,39 +197,43 @@ export function createHub({ isolateUrl, server, path = "/@yeetkit/ws", actions, 
     toBrowsers(frame);
   };
 
-  const connect = () => {
-    socket = new WebSocket(isolateUrl);
-    socket.binaryType = "arraybuffer";
-    const feed = framer(onIsolateFrame);
+  /* `hello` is what makes the isolate write the tree, and it writes
+   * it to whoever is on `view` at that moment — so a hello sent before
+   * the view socket is up is a tree sent to nobody. It is held until
+   * both are open, and repeated when either comes back: a browser that
+   * was already here when the isolate restarted is still waiting on a
+   * tree, and asking on its behalf is what makes a restart invisible
+   * to it. */
+  const viewReady = () => viewUrl === null || tree.open;
+  let helloOwed = false;
 
-    socket.addEventListener("open", () => {
-      ready = true;
-      for (const message of outbox.splice(0)) socket.send(encodeUplink(message));
-      /* A browser that was already here when the isolate restarted is
-       * still waiting on a tree; asking on its behalf is what makes a
-       * restart invisible to it. */
-      if (browsers.size > 0) toIsolate({ t: "hello", path: "/" });
-    });
-
-    socket.addEventListener("message", (event) => {
-      feed(
-        typeof event.data === "string"
-          ? event.data
-          : new TextDecoder().decode(new Uint8Array(event.data)),
-      );
-    });
-
-    socket.addEventListener("close", () => {
-      ready = false;
-      /* The isolate restarts on every edit in development, so this is
-       * the normal case rather than an error. */
-      setTimeout(connect, 300);
-    });
-
-    socket.addEventListener("error", () => {});
+  const hello = () => {
+    if (!control.open || !viewReady()) {
+      helloOwed = true;
+      return;
+    }
+    helloOwed = false;
+    control.send({ t: "hello", path: lastPath });
   };
 
-  connect();
+  const control = dial(isolateUrl, {
+    onOpen() {
+      for (const message of outbox.splice(0)) control.send(message);
+      if (helloOwed || browsers.size > 0) hello();
+    },
+    onFrame: onIsolateFrame,
+  });
+
+  /* Nothing on this socket is addressed to anyone: it is the tree, and
+   * every browser gets it. */
+  const tree = viewUrl
+    ? dial(viewUrl, {
+        onOpen() {
+          if (helloOwed || browsers.size > 0) hello();
+        },
+        onFrame: toBrowsers,
+      })
+    : null;
 
   // ---- browsers ------------------------------------------------------
 
@@ -280,45 +244,38 @@ export function createHub({ isolateUrl, server, path = "/@yeetkit/ws", actions, 
     const number = nextBrowser++;
     byNumber.set(number, browser);
 
-    let pending = "";
     browser.on("message", async (data) => {
-      pending += data.toString();
+      const message = decode(data.toString());
+      if (!message) return;
 
-      for (;;) {
-        const at = pending.indexOf("\n");
-        if (at < 0) return;
-        const line = pending.slice(0, at);
-        pending = pending.slice(at + 1);
-        if (!line) continue;
-
-        let message;
-        try {
-          message = JSON.parse(decodeUplink(line));
-        } catch {
-          continue;
+      /* An island calling a `"use server"` function. Answered here,
+       * to this browser alone — the isolate is not involved and the
+       * other tabs never see it. */
+      if (message.t === "nodecall") {
+        const result = await actions.call(message.action, message.args ?? []);
+        if (browser.readyState === 1) {
+          browser.send(encode({ op: "noderesult", cid: message.cid, ...result }));
         }
+        return;
+      }
 
-        /* An island calling a `"use server"` function. Answered here,
-         * to this browser alone — the isolate is not involved and the
-         * other tabs never see it. */
-        if (message.t === "nodecall") {
-          const result = await actions.call(message.action, message.args ?? []);
-          if (browser.readyState === 1) {
-            browser.send(encodeFrame({ op: "noderesult", cid: message.cid, ...result }));
-          }
-          continue;
+      if (message.t === "hello" || message.t === "nav") {
+        if (message.path) lastPath = message.path;
+        if (message.t === "hello") {
+          hello();
+          return;
         }
+      }
 
-        /* Anything with a reply gets tagged so the reply can find its
-         * way back to this socket and no other. `hello`, `event`,
-         * `nav` and `key` have no reply and are forwarded as they are. */
-        if (message.cid !== undefined) {
-          toIsolate({ ...message, cid: `b${number}:${message.cid}` });
-        } else if (message.sid !== undefined) {
-          toIsolate({ ...message, sid: `b${number}:${message.sid}` });
-        } else {
-          toIsolate(message);
-        }
+      /* Anything with a reply gets tagged so the reply can find its
+       * way back to this socket and no other. `hello`, `event`,
+       * `nav` and `key` have no reply and are forwarded as they are. */
+      if (message.cid !== undefined) {
+        toIsolate({ ...message, cid: `b${number}:${message.cid}` });
+      } else if (message.sid !== undefined) {
+        toIsolate({ ...message, sid: `b${number}:${message.sid}` });
+      } else {
+        toIsolate(message);
       }
     });
 
@@ -331,7 +288,7 @@ export function createHub({ isolateUrl, server, path = "/@yeetkit/ws", actions, 
     });
   });
 
-  log?.("kit", `hub on ${path} — isolate at ${isolateUrl}`);
+  log?.("kit", `hub on ${path} — isolate at ${isolateUrl}${viewUrl ? `, view at ${viewUrl}` : ""}`);
 
   return {
     callIsolate,
@@ -340,7 +297,8 @@ export function createHub({ isolateUrl, server, path = "/@yeetkit/ws", actions, 
     close() {
       for (const browser of browsers) browser.close();
       wss.close();
-      socket?.close();
+      control.close();
+      tree?.close();
     },
   };
 }

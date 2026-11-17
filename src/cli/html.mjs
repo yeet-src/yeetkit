@@ -7,10 +7,10 @@
  */
 
 export function indexHtml({ title, dev, direct = null }) {
-  /* Direct mode: the view comes straight from the isolate's console
+  /* Direct mode: the view comes straight from the isolate's `view`
    * portal, on the page's own host at the configured port. The hub
    * socket stays, for events and private replies. */
-  const view = direct ? `, { view: \`\${scheme}://\${location.hostname}:${direct}/\` }` : "";
+  const view = direct ? `, { view: \`\${scheme}://\${location.hostname}:${direct}/view\` }` : "";
   /* Dev serves the framework's files from a namespaced path; a build
    * copies them next to the page. */
   const client = dev ? "/@yeetkit/client.js" : "./client.js";
@@ -46,10 +46,10 @@ export function indexHtml({ title, dev, direct = null }) {
          so a build has to answer there too. */
       window.__yeetkitIslands = "${islands}";
       import { connect } from "${client}";
-      /* The hub lives on this page's own origin. The isolate's tty
+      /* The hub lives on this page's own origin. The isolate's hub
          portal is loopback-only and Node is the one peer on it; in
-         direct mode a second socket dials the isolate's console lane
-         for the view. */
+         direct mode a second socket dials the isolate's view portal
+         for the tree. */
       const scheme = location.protocol === "https:" ? "wss" : "ws";
       connect(\`\${scheme}://\${location.host}/@yeetkit/ws\`, document.getElementById("app")${view});
     </script>${reload}

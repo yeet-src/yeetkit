@@ -5,7 +5,7 @@
  *
  * What is worth asserting here is not that each runtime works — the
  * other phases do that — but that the *seams* do: that a browser
- * reaches the view without ever touching the isolate's portal, that a
+ * reaches the view without ever touching the isolate's portals, that a
  * `"use server"` call is answered by Node, and that Node can turn
  * around and ask the isolate something in the middle of it.
  *
@@ -25,26 +25,7 @@ const at = process.argv.indexOf("--port");
 const port = at >= 0 ? Number(process.argv[at + 1]) : 3610;
 const wsPort = port + 1;
 
-const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-const OSC_OPEN = "\x1b]7880;";
-const OSC_CLOSE = "\x07";
-
-const encode = (message) => {
-  const bytes = new TextEncoder().encode(JSON.stringify(message));
-  let out = "";
-  let bits = 0;
-  let width = 0;
-  for (const byte of bytes) {
-    bits = (bits << 8) | byte;
-    width += 8;
-    while (width >= 6) {
-      width -= 6;
-      out += B64[(bits >> width) & 0x3f];
-    }
-  }
-  if (width > 0) out += B64[(bits << (6 - width)) & 0x3f];
-  return new TextEncoder().encode(`${out}\n`);
-};
+const encode = (message) => JSON.stringify(message);
 
 let failures = 0;
 const check = (label, ok, detail = "") => {
@@ -103,23 +84,13 @@ if (!ready) {
 await new Promise((r) => setTimeout(r, 2500));
 
 const socket = new WebSocket(`ws://127.0.0.1:${port}/@yeetkit/ws`);
-socket.binaryType = "arraybuffer";
 
 const frames = [];
-let pending = "";
 socket.addEventListener("message", (event) => {
-  pending += typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data);
-  for (;;) {
-    const start = pending.indexOf(OSC_OPEN);
-    if (start < 0) return;
-    const end = pending.indexOf(OSC_CLOSE, start);
-    if (end < 0) return;
-    try {
-      frames.push(JSON.parse(pending.slice(start + OSC_OPEN.length, end)));
-    } catch {
-      // torn frame
-    }
-    pending = pending.slice(end + OSC_CLOSE.length);
+  try {
+    frames.push(JSON.parse(event.data));
+  } catch {
+    // not a frame
   }
 });
 
@@ -172,22 +143,12 @@ if (connected) {
    * each browser counts from 1, so without the hub rewriting them two
    * tabs would collide. */
   const other = new WebSocket(`ws://127.0.0.1:${port}/@yeetkit/ws`);
-  other.binaryType = "arraybuffer";
   const otherFrames = [];
-  let otherBuf = "";
   other.addEventListener("message", (event) => {
-    otherBuf += typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data);
-    for (;;) {
-      const start = otherBuf.indexOf(OSC_OPEN);
-      if (start < 0) return;
-      const end = otherBuf.indexOf(OSC_CLOSE, start);
-      if (end < 0) return;
-      try {
-        otherFrames.push(JSON.parse(otherBuf.slice(start + OSC_OPEN.length, end)));
-      } catch {
-        // torn
-      }
-      otherBuf = otherBuf.slice(end + OSC_CLOSE.length);
+    try {
+      otherFrames.push(JSON.parse(event.data));
+    } catch {
+      // not a frame
     }
   });
   await new Promise((done) => {
